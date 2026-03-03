@@ -1,0 +1,14 @@
+name: ablation_wo_parallel_tts
+manifest_path: manifest_nlp_v6_mixedbest.csv
+n_samples: null
+seed: 0
+bucket_main: null  # Do not participate in Table 1 main table
+bucket_ablation: w/o ParallelTTS
+adapter:
+  # mode: stub  # Disabled, use real llama.cpp server
+  server_url: http://127.0.0.1:8080/v1/chat/completions
+  thinking: false
+  streaming: true
+  parallel_tts: false
+  resize_896: true
+  safety_abstain: true

@@ -1,0 +1,19 @@
+name: minicpmo_full
+manifest_path: manifest_nlp_v6_mixedbest.csv
+n_samples: null   # null = all
+seed: 0
+
+# Tags used by the aggregator to place this run into Table1/Table2 buckets
+bucket_main: Ours-O
+bucket_ablation: Full-O
+
+# Adapter settings — points to MiniCPM-o llama.cpp server
+adapter:
+  server_url: http://127.0.0.1:8080/v1/chat/completions
+  model: MiniCPM-o
+  thinking: false          # Disable thinking for fair latency comparison
+  streaming: true
+  parallel_tts: true
+  resize_896: true
+  safety_abstain: true
+  strip_think_tags: true   # Strip think tags (prevent thinking leakage to scoring)

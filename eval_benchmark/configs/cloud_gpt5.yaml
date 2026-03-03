@@ -1,0 +1,19 @@
+name: cloud_gpt5
+manifest_path: manifest_nlp_v6_mixedbest.csv
+n_samples: null   # null = all
+seed: 0
+
+# Tags used by the aggregator to place this run into Table1/Table2 buckets
+bucket_main: Cloud
+bucket_ablation: null
+
+# Adapter settings - OpenAI GPT-5.2 (2026 latest flagship)
+# Cost estimate: ~$0.25 for 121 images
+adapter:
+  provider: gpt-5.2
+  model: gpt-5.2  # OpenAI latest flagship model
+  # api_key: YOUR_OPENAI_API_KEY  # or set env OPENAI_API_KEY
+  streaming: true
+  parallel_tts: true
+  resize_896: true
+  safety_abstain: true

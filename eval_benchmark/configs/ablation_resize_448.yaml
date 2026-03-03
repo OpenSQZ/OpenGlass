@@ -1,0 +1,19 @@
+name: ablation_resize_448
+manifest_path: manifest_nlp_v6_mixedbest.csv
+n_samples: null   # null = all
+seed: 0
+
+# Tags used by the aggregator to place this run into Table1/Table2 buckets
+bucket_main: null
+bucket_ablation: Resize448  # 448 pixels max edge (1 slice vs 3 slices at 896)
+
+# Adapter settings
+adapter:
+  server_url: http://127.0.0.1:8080/v1/chat/completions
+  model: MiniCPM-V
+  thinking: false
+  streaming: true       # Keep streaming
+  parallel_tts: true    # Keep parallel TTS
+  resize_896: true      # Enable resize
+  max_edge: 448         # ⭐ Key: 448 pixels max edge → 1 slice
+  safety_abstain: true  # Keep safety fallback

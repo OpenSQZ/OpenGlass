@@ -1,0 +1,14 @@
+name: naive_on_device
+manifest_path: manifest_nlp_v6_mixedbest.csv
+n_samples: null
+seed: 0
+bucket_main: NaiveOnDevice
+bucket_ablation: null
+adapter:
+  # mode: stub  # Disabled, use real llama.cpp server
+  server_url: http://127.0.0.1:8080/v1/chat/completions
+  thinking: false
+  streaming: false
+  parallel_tts: true   # Changed to true, give Naive TTS for apples-to-apples comparison with Ours
+  resize_896: false
+  safety_abstain: false

@@ -1,0 +1,9 @@
+name: cloud_api
+manifest_path: manifest_nlp_v6_mixedbest.csv
+n_samples: null
+seed: 0
+bucket_main: Cloud
+bucket_ablation: null
+adapter:
+  mode: stub
+  provider: gpt-4o-or-gemini

@@ -1,0 +1,19 @@
+name: ours_full
+manifest_path: manifest_nlp_v6_mixedbest.csv
+n_samples: null   # null = all
+seed: 0
+
+# Tags used by the aggregator to place this run into Table1/Table2 buckets
+bucket_main: Ours
+bucket_ablation: Full
+
+# Adapter settings (you will wire these to your real scripts)
+adapter:
+  # mode: stub  # Disabled, use real llama.cpp server
+  server_url: http://127.0.0.1:8080/v1/chat/completions
+  model: MiniCPM-V
+  thinking: false
+  streaming: true
+  parallel_tts: true
+  resize_896: true
+  safety_abstain: true

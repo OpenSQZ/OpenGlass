@@ -1,0 +1,19 @@
+name: minicpmo_thinking
+manifest_path: manifest_nlp_v6_mixedbest.csv
+n_samples: null   # null = all
+seed: 0
+
+# Tags: used by aggregator to group into Table 1 and Table 2
+bucket_main: Ours-O-Think
+bucket_ablation: Full-O-Think
+
+# Adapter settings — MiniCPM-o with thinking chain enabled
+adapter:
+  server_url: http://127.0.0.1:8080/v1/chat/completions
+  model: MiniCPM-o
+  thinking: true           # Enable thinking to show quality ceiling
+  streaming: true
+  parallel_tts: true
+  resize_896: true
+  safety_abstain: true
+  strip_think_tags: true   # Must strip think tags, keep only final answer for scoring

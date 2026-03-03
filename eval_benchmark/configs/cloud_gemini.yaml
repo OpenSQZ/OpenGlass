@@ -1,0 +1,19 @@
+name: cloud_gemini
+manifest_path: manifest_nlp_v6_mixedbest.csv
+n_samples: null   # null = all
+seed: 0
+
+# Tags used by the aggregator to place this run into Table1/Table2 buckets
+bucket_main: Cloud
+bucket_ablation: null
+
+# Adapter settings - Google Gemini 2.0 Flash (current latest available version)
+# Cost estimate: ~$0.05 for 121 images
+adapter:
+  provider: gemini-flash
+  model: gemini-2.0-flash  # Current latest available Flash model
+  # api_key: YOUR_GOOGLE_API_KEY  # or set env GOOGLE_API_KEY
+  streaming: true
+  parallel_tts: true
+  resize_896: true
+  safety_abstain: true

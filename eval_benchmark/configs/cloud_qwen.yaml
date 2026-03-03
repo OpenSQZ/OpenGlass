@@ -1,0 +1,20 @@
+name: cloud_qwen
+manifest_path: manifest_nlp_v6_mixedbest.csv
+n_samples: null   # null = all
+seed: 0
+
+# Tags used by the aggregator to place this run into Table1/Table2 buckets
+bucket_main: CloudCN
+bucket_ablation: null
+
+# Adapter settings - Alibaba Cloud Tongyi Qwen-VL (China API, no VPN needed)
+# API Key: https://dashscope.console.aliyun.com/
+# Pricing: qwen-vl-max ~¥0.02/thousand tokens, qwen-vl-plus ~¥0.008/thousand tokens
+adapter:
+  provider: qwen-vl
+  model: qwen-vl-max  # or qwen-vl-plus (cheaper)
+  # api_key: YOUR_DASHSCOPE_API_KEY  # or set env DASHSCOPE_API_KEY
+  streaming: true
+  parallel_tts: true
+  resize_896: true
+  safety_abstain: true

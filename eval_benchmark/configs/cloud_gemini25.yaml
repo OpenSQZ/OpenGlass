@@ -1,0 +1,18 @@
+name: cloud_gemini25
+manifest_path: manifest_nlp_v6_mixedbest.csv
+n_samples: null   # null = all
+seed: 0
+
+# Tags used by the aggregator to place this run into Table1/Table2 buckets
+bucket_main: Cloud25
+bucket_ablation: null
+
+# Adapter settings - Google Gemini 2.5 Flash (latest version)
+adapter:
+  provider: gemini-flash
+  model: gemini-2.5-flash  # Latest 2.5 version
+  # api_key: YOUR_GOOGLE_API_KEY  # or set env GOOGLE_API_KEY
+  streaming: true
+  parallel_tts: true
+  resize_896: true
+  safety_abstain: true

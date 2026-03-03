@@ -1,0 +1,18 @@
+name: cloud_gpt4o
+manifest_path: manifest_nlp_v6_mixedbest.csv
+n_samples: null   # null = all
+seed: 0
+
+# Tags used by the aggregator to place this run into Table1/Table2 buckets
+bucket_main: Cloud
+bucket_ablation: null
+
+# Adapter settings - OpenAI GPT-4o (most capable but expensive)
+adapter:
+  provider: gpt-4o
+  model: gpt-4o
+  # api_key: YOUR_OPENAI_API_KEY  # or set env OPENAI_API_KEY
+  streaming: true
+  parallel_tts: true
+  resize_896: true
+  safety_abstain: true

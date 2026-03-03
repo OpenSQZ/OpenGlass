@@ -1,0 +1,159 @@
+{
+  "_comment": "Multi-turn conversation stability experiment. Each scenario uses one image with 5 sequential turns. Turn 5 repeats Turn 1 to measure drift.",
+  "adapter_config": {
+    "server_url": "http://127.0.0.1:8080/v1/chat/completions",
+    "model": "MiniCPM-o",
+    "thinking": false,
+    "streaming": true,
+    "parallel_tts": true,
+    "resize_896": true,
+    "safety_abstain": true,
+    "strip_think_tags": true
+  },
+  "scenarios": [
+    {
+      "id": "MT_01",
+      "image_path": "eval_data\\T1_obstacle\\T1_20260107_163523_1m_bright.jpg",
+      "base_task": "T1",
+      "turns": [
+        {"prompt": "前方有障碍物吗？", "gt_answer": "正前方约1米有椅子，请停下绕行"},
+        {"prompt": "障碍物大概多高？是什么颜色的？", "gt_answer": "椅子约80厘米高，颜色较深"},
+        {"prompt": "如果我要绕过去，向左还是向右更安全？", "gt_answer": "建议向右绕行，右侧空间较大"},
+        {"prompt": "绕过去之后前方还有其他障碍吗？", "gt_answer": "无法确定绕行后的情况，请缓慢前进并重新拍照"},
+        {"prompt": "前方有障碍物吗？", "gt_answer": "正前方约1米有椅子，请停下绕行"}
+      ]
+    },
+    {
+      "id": "MT_02",
+      "image_path": "eval_data\\T1_obstacle\\T1_20260107_194616_1m_dim.jpg",
+      "base_task": "T1",
+      "turns": [
+        {"prompt": "前方安全吗？", "gt_answer": "右侧约1米有桌子，向左绕行"},
+        {"prompt": "桌子上有什么东西？", "gt_answer": "光线较暗，无法完全看清桌上物品"},
+        {"prompt": "画面亮度怎么样？需要补光吗？", "gt_answer": "画面偏暗，建议补光后重拍"},
+        {"prompt": "那个障碍物是固定的还是可以移开的？", "gt_answer": "看起来是固定桌子，建议绕行"},
+        {"prompt": "前方安全吗？", "gt_answer": "右侧约1米有桌子，向左绕行"}
+      ]
+    },
+    {
+      "id": "MT_03",
+      "image_path": "eval_data\\T2_find\\T2_20260107_205821_1m_bright.jpg",
+      "base_task": "T2",
+      "turns": [
+        {"prompt": "能看到手机吗？", "gt_answer": "手机在正前方，请靠近"},
+        {"prompt": "手机旁边还有什么东西？", "gt_answer": "手机附近有其他物品"},
+        {"prompt": "手机屏幕是亮的还是灭的？", "gt_answer": "无法确定屏幕状态，建议靠近查看"},
+        {"prompt": "能帮我看一下手机品牌吗？", "gt_answer": "距离较远，请靠近后重拍以识别品牌"},
+        {"prompt": "能看到手机吗？", "gt_answer": "手机在正前方，请靠近"}
+      ]
+    },
+    {
+      "id": "MT_04",
+      "image_path": "eval_data\\T2_find\\T2_20260107_210239_1m_bright.jpg",
+      "base_task": "T2",
+      "turns": [
+        {"prompt": "能看到固定电话吗？", "gt_answer": "固定电话在左侧，请靠近"},
+        {"prompt": "电话是什么颜色的？", "gt_answer": "电话颜色较深"},
+        {"prompt": "电话旁边有其他物品吗？", "gt_answer": "电话附近有一些物品"},
+        {"prompt": "如果我要拿到电话需要往哪走？", "gt_answer": "向左侧靠近即可到达电话"},
+        {"prompt": "能看到固定电话吗？", "gt_answer": "固定电话在左侧，请靠近"}
+      ]
+    },
+    {
+      "id": "MT_05",
+      "image_path": "eval_data\\T3_sign\\T3A_20260107_213503_1m_bright.jpg",
+      "base_task": "T3A",
+      "turns": [
+        {"prompt": "这个标识牌写的什么？", "gt_answer": "标识：出口，含义：此处为出口通道"},
+        {"prompt": "标识是什么颜色的底色？", "gt_answer": "绿色底色白色文字"},
+        {"prompt": "标识牌上有箭头吗？指向哪里？", "gt_answer": "需要仔细查看，请靠近确认"},
+        {"prompt": "出口方向是在我的左边还是右边？", "gt_answer": "根据标识位置判断出口方向"},
+        {"prompt": "这个标识牌写的什么？", "gt_answer": "标识：出口，含义：此处为出口通道"}
+      ]
+    },
+    {
+      "id": "MT_06",
+      "image_path": "eval_data\\T3_sign\\T3A_20260107_214400_1m_bright.jpg",
+      "base_task": "T3A",
+      "turns": [
+        {"prompt": "前面的牌子上写了什么？", "gt_answer": "标识：卫生间，含义：此处为卫生间"},
+        {"prompt": "是男卫生间还是女卫生间？", "gt_answer": "需靠近查看具体标识"},
+        {"prompt": "卫生间离我大概多远？", "gt_answer": "约1米左右"},
+        {"prompt": "旁边还有其他标识吗？", "gt_answer": "看不清其他标识，请转头扫描"},
+        {"prompt": "前面的牌子上写了什么？", "gt_answer": "标识：卫生间，含义：此处为卫生间"}
+      ]
+    },
+    {
+      "id": "MT_07",
+      "image_path": "eval_data\\T3_sign\\T3A_20260107_221418_1m_bright.jpg",
+      "base_task": "T3A",
+      "turns": [
+        {"prompt": "这里是什么房间？", "gt_answer": "标识：会议室"},
+        {"prompt": "门是开着的还是关着的？", "gt_answer": "无法确定门的状态，请靠近查看"},
+        {"prompt": "门上有门牌号吗？", "gt_answer": "需靠近查看是否有门牌号"},
+        {"prompt": "门口有人吗？", "gt_answer": "画面中未见有人"},
+        {"prompt": "这里是什么房间？", "gt_answer": "标识：会议室"}
+      ]
+    },
+    {
+      "id": "MT_08",
+      "image_path": "eval_data\\T3_qr\\T3B_20260107_221034_1m_bright.jpg",
+      "base_task": "T3B",
+      "turns": [
+        {"prompt": "这里有二维码吗？内容是什么？", "gt_answer": "看到二维码，内容：AI_Glasses_Test_QR_4cm"},
+        {"prompt": "二维码大概多大？", "gt_answer": "二维码约4厘米见方"},
+        {"prompt": "二维码旁边有文字说明吗？", "gt_answer": "需要靠近查看是否有说明文字"},
+        {"prompt": "二维码是贴在什么材质上的？", "gt_answer": "看不清材质，请靠近查看"},
+        {"prompt": "这里有二维码吗？内容是什么？", "gt_answer": "看到二维码，内容：AI_Glasses_Test_QR_4cm"}
+      ]
+    },
+    {
+      "id": "MT_09",
+      "image_path": "eval_data\\T1_obstacle\\T1_20260107_204500_1m_bright.jpg",
+      "base_task": "T1",
+      "turns": [
+        {"prompt": "左边有障碍物吗？", "gt_answer": "左侧约1米有障碍物，向右绕行"},
+        {"prompt": "这个障碍物是什么？", "gt_answer": "看起来是垃圾桶"},
+        {"prompt": "右侧通道够宽吗？能安全通过吗？", "gt_answer": "右侧通道看起来可以通过，建议缓慢前行"},
+        {"prompt": "地面平整吗？有台阶吗？", "gt_answer": "无法确定地面情况，请放慢脚步"},
+        {"prompt": "左边有障碍物吗？", "gt_answer": "左侧约1米有障碍物，向右绕行"}
+      ]
+    },
+    {
+      "id": "MT_10",
+      "image_path": "eval_data\\T2_find\\T2_20260107_211136_1m_dim.jpg",
+      "base_task": "T2",
+      "turns": [
+        {"prompt": "有没有看到剪刀？", "gt_answer": "剪刀在正前方，请靠近"},
+        {"prompt": "剪刀是打开的还是合上的？", "gt_answer": "无法确定状态，请靠近查看"},
+        {"prompt": "剪刀附近有没有危险物品？", "gt_answer": "周围暂未发现明显危险物品"},
+        {"prompt": "光线够吗？需要补光吗？", "gt_answer": "光线偏暗，建议补光后重拍"},
+        {"prompt": "有没有看到剪刀？", "gt_answer": "剪刀在正前方，请靠近"}
+      ]
+    },
+    {
+      "id": "MT_11",
+      "image_path": "eval_data\\H1_quality\\H1_20260107_223255_1m_dim.jpg",
+      "base_task": "H1",
+      "turns": [
+        {"prompt": "画面质量怎么样？", "gt_answer": "画面太暗，请开灯或靠近"},
+        {"prompt": "能大概看清前方有什么吗？", "gt_answer": "光线不足，看不清细节"},
+        {"prompt": "如果我打开手电筒会好一些吗？", "gt_answer": "建议开灯或使用手电筒补光"},
+        {"prompt": "现在适合拍照识别吗？", "gt_answer": "不适合，请改善光线后重拍"},
+        {"prompt": "画面质量怎么样？", "gt_answer": "画面太暗，请开灯或靠近"}
+      ]
+    },
+    {
+      "id": "MT_12",
+      "image_path": "eval_data\\H1_quality\\H1_20260107_223956_1m_dim.jpg",
+      "base_task": "H1",
+      "turns": [
+        {"prompt": "这张照片清晰吗？", "gt_answer": "画面模糊，请稳住并对焦"},
+        {"prompt": "是因为手抖了还是对焦问题？", "gt_answer": "可能是运动模糊，请稳住后重拍"},
+        {"prompt": "需要我调整距离吗？", "gt_answer": "请稳住后靠近目标重拍"},
+        {"prompt": "前方有什么东西？", "gt_answer": "画面模糊无法识别，请重拍"},
+        {"prompt": "这张照片清晰吗？", "gt_answer": "画面模糊，请稳住并对焦"}
+      ]
+    }
+  ]
+}

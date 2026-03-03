@@ -1,0 +1,9 @@
+pandas>=2.0
+numpy>=1.24
+matplotlib>=3.7
+pyyaml>=6.0
+requests  # or httpx (for llama.cpp server API calls)
+openai    # OpenAI API (GPT-4o) and llama.cpp OpenAI-compatible API
+google-generativeai  # Google Gemini API
+edge-tts  # TTS library
+aiohttp   # Async streaming requests
