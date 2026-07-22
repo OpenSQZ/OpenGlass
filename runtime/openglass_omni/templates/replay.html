@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>AI 眼镜 · 回放</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0
+        }
+
+        html, body {
+            height: 100%
+        }
+
+        body {
+            font-family: -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+            background: #0a0e1a;
+            color: #e8ecf4;
+            overflow: hidden
+        }
+
+        .app {
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            height: 100vh
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 24px;
+            background: linear-gradient(180deg,#0f1629 0%,transparent 100%);
+            border-bottom: 1px solid rgba(255,255,255,.06);
+            z-index: 10
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 16px;
+            font-weight: 600
+        }
+
+        .brand-icon {
+            font-size: 26px
+        }
+
+        .brand-sub {
+            color: #8a93a8;
+            font-weight: 400;
+            font-size: 12px;
+            margin-top: 2px;
+            font-family: 'SF Mono',ui-monospace,Menlo,monospace
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 10px
+        }
+
+        .pill {
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: rgba(255,255,255,.06);
+            font-size: 12px;
+            color: #b5bdd0;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px
+        }
+
+            .pill.good {
+                color: #5dd39e
+            }
+
+            .pill.warn {
+                color: #f6c177
+            }
+
+            .pill.bad {
+                color: #eb6f92
+            }
+
+        .icon-btn {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,.1);
+            color: #b5bdd0;
+            padding: 7px 13px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            text-decoration: none;
+            transition: all .15s
+        }
+
+            .icon-btn:hover {
+                border-color: rgba(255,255,255,.3);
+                color: #fff
+            }
+
+        main {
+            display: grid;
+            grid-template-columns: 1.4fr 1fr;
+            gap: 20px;
+            padding: 20px 24px;
+            min-height: 0
+        }
+
+        @media (max-width:900px) {
+            main {
+                grid-template-columns: 1fr;
+                grid-template-rows: 1fr 1fr
+            }
+        }
+
+        .media-panel {
+            position: relative;
+            background: #000;
+            border-radius: 16px;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid rgba(255,255,255,.06)
+        }
+
+            .media-panel video, .media-panel audio {
+                width: 100%;
+                height: 100%;
+                object-fit: contain;
+                display: block;
+                background: #000
+            }
+
+            .media-panel .audio-wrap {
+                width: 100%;
+                padding: 40px;
+                text-align: center;
+                background: linear-gradient(135deg,#131b33,#0f1629)
+            }
+
+                .media-panel .audio-wrap .big {
+                    font-size: 56px;
+                    margin-bottom: 16px;
+                    opacity: .6
+                }
+
+                .media-panel .audio-wrap .lbl {
+                    color: #8a93a8;
+                    font-size: 13px;
+                    margin-bottom: 20px
+                }
+
+                .media-panel .audio-wrap audio {
+                    width: 100%;
+                    max-width: 560px;
+                    margin: 0 auto;
+                    background: transparent
+                }
+
+        .no-media {
+            padding: 40px;
+            text-align: center;
+            color: #eb6f92
+        }
+
+            .no-media .big {
+                font-size: 48px;
+                margin-bottom: 14px;
+                opacity: .5
+            }
+
+            .no-media .msg {
+                font-size: 14px;
+                line-height: 1.6;
+                color: #b5bdd0;
+                max-width: 420px;
+                margin: 0 auto
+            }
+
+            .no-media code {
+                background: rgba(255,255,255,.08);
+                padding: 1px 6px;
+                border-radius: 4px;
+                font-family: 'SF Mono',ui-monospace,Menlo,monospace;
+                font-size: 12px;
+                color: #f6c177
+            }
+
+        .media-overlay {
+            position: absolute;
+            top: 14px;
+            left: 14px;
+            background: rgba(0,0,0,.5);
+            backdrop-filter: blur(8px);
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            color: #fff;
+            letter-spacing: .5px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            pointer-events: none
+        }
+
+        .convo-panel {
+            background: rgba(255,255,255,.03);
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,.06);
+            display: flex;
+            flex-direction: column;
+            min-height: 0
+        }
+
+        .convo-head {
+            padding: 14px 18px;
+            border-bottom: 1px solid rgba(255,255,255,.06);
+            font-size: 13px;
+            color: #8a93a8;
+            display: flex;
+            justify-content: space-between;
+            align-items: center
+        }
+
+        .convo-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            scroll-behavior: smooth
+        }
+
+            .convo-body::-webkit-scrollbar {
+                width: 6px
+            }
+
+            .convo-body::-webkit-scrollbar-thumb {
+                background: rgba(255,255,255,.1);
+                border-radius: 3px
+            }
+
+        .convo-empty {
+            margin: auto;
+            color: #4a556f;
+            font-size: 14px;
+            text-align: center
+        }
+
+        .msg {
+            max-width: 88%;
+            padding: 12px 16px;
+            border-radius: 14px;
+            font-size: 16px;
+            line-height: 1.5;
+            cursor: pointer;
+            opacity: .4;
+            transition: opacity .15s, box-shadow .15s, transform .1s;
+            position: relative
+        }
+
+            .msg:hover {
+                opacity: .85
+            }
+
+            .msg.played {
+                opacity: 1
+            }
+
+            .msg.current {
+                box-shadow: 0 0 0 2px #8ab4ff, 0 4px 20px rgba(138,180,255,.25)
+            }
+
+            .msg.user {
+                align-self: flex-end;
+                background: #2a3350;
+                color: #e8ecf4;
+                border-bottom-right-radius: 4px
+            }
+
+            .msg.ai {
+                align-self: flex-start;
+                background: linear-gradient(135deg,#3b5bdb 0%,#6741d9 100%);
+                color: #fff;
+                border-bottom-left-radius: 4px
+            }
+
+            .msg .who {
+                font-size: 11px;
+                opacity: .7;
+                margin-bottom: 4px;
+                display: flex;
+                justify-content: space-between;
+                gap: 12px
+            }
+
+            .msg .time {
+                font-family: 'SF Mono',ui-monospace,Menlo,monospace;
+                font-size: 10px;
+                opacity: .85
+            }
+
+        footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 24px;
+            gap: 20px;
+            background: linear-gradient(0deg,#0f1629 0%,transparent 100%);
+            border-top: 1px solid rgba(255,255,255,.06);
+            flex-wrap: wrap
+        }
+
+        .footer-left {
+            color: #8a93a8;
+            font-size: 12px
+        }
+
+        .downloads {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap
+        }
+
+        .dl {
+            padding: 7px 13px;
+            border-radius: 8px;
+            font-size: 12px;
+            border: 1px solid rgba(255,255,255,.1);
+            background: rgba(255,255,255,.04);
+            color: #b5bdd0;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all .15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px
+        }
+
+            .dl:hover {
+                background: rgba(255,255,255,.08);
+                color: #fff;
+                border-color: rgba(255,255,255,.25)
+            }
+    </style>
+</head>
+<body>
+
+    <div class="app">
+        <header>
+            <div class="brand">
+                <span class="brand-icon">🎬</span>
+                <div>
+                    <div>AI 眼镜 · 会话回放</div>
+                    <div class="brand-sub" id="sid">—</div>
+                </div>
+            </div>
+            <div class="header-right">
+                <span class="pill" id="mediaPill"><span>·</span><span id="mediaText">探测中…</span></span>
+                <span class="pill" id="turnsPill">0 轮</span>
+                <a class="icon-btn" href="/replay">⬅ 所有会话</a>
+                <a class="icon-btn" href="/">🔴 实时</a>
+            </div>
+        </header>
+
+        <main>
+            <section class="media-panel" id="mediaPanel">
+                <div class="no-media" id="mediaLoading">
+                    <div class="big">⏳</div>
+                    <div class="msg">加载中…</div>
+                </div>
+            </section>
+
+            <section class="convo-panel">
+                <div class="convo-head">
+                    <span>💬 字幕时间线</span>
+                    <span id="hint" style="font-size:11px;color:#6b7490">点击跳转</span>
+                </div>
+                <div class="convo-body" id="turns">
+                    <div class="convo-empty" id="turnsEmpty">暂无字幕</div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <div class="footer-left" id="footerInfo">—</div>
+            <div class="downloads" id="downloads"></div>
+        </footer>
+    </div>
+
+    <script>
+        const sid = location.pathname.split('/').filter(Boolean).pop();
+        document.getElementById('sid').textContent = sid;
+
+        const $ = id => document.getElementById(id);
+        const fmt = s => { s = Math.max(0, s | 0); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+
+        let mediaEl = null;
+        let turnEls = [];
+
+        async function probeMedia() {
+            for (const [path, kind] of [
+                ['/api/session/' + sid + '/video', 'video'],
+                ['/api/session/' + sid + '/audio', 'audio']
+            ]) {
+                try {
+                    const r = await fetch(path, { method: 'HEAD' });
+                    if (r.ok) return { path, kind };
+                } catch (e) { }
+            }
+            return null;
+        }
+
+        function buildTurns(events) {
+            const tEl = $('turns');
+            tEl.innerHTML = '';
+            if (!events.length) {
+                tEl.innerHTML = '<div class="convo-empty">此会话无字幕事件</div>';
+                return;
+            }
+            const t0 = events[0].t;
+            let cur = null, curL = null;
+            let turnCount = 0;
+
+            for (const e of events) {
+                if (e.kind !== 'result' || !e.text) continue;
+                const rt = e.t - t0;
+                if (cur === null || curL !== e.is_listen) {
+                    cur = document.createElement('div');
+                    cur.className = 'msg ' + (e.is_listen ? 'user' : 'ai');
+                    cur.dataset.startRt = rt;
+                    cur.onclick = () => { if (mediaEl) { mediaEl.currentTime = rt; mediaEl.play && mediaEl.play().catch(() => { }); } };
+
+                    const who = document.createElement('div');
+                    who.className = 'who';
+                    const lbl = document.createElement('span');
+                    lbl.textContent = e.is_listen ? '👤 用户' : '🤖 AI 眼镜';
+                    const tm = document.createElement('span');
+                    tm.className = 'time';
+                    tm.textContent = fmt(rt);
+                    who.appendChild(lbl); who.appendChild(tm);
+
+                    const body = document.createElement('div');
+                    body.className = 'body';
+
+                    cur.appendChild(who); cur.appendChild(body);
+                    cur._body = body;
+                    tEl.appendChild(cur);
+                    curL = e.is_listen;
+                    turnCount++;
+                }
+                cur._body.textContent = (cur._body.textContent || '') + e.text;
+                cur.dataset.endRt = rt;
+                if (e.end_of_turn) { cur = null; curL = null; }
+            }
+
+            turnEls = Array.from(tEl.querySelectorAll('.msg'));
+            $('turnsPill').textContent = turnCount + ' 轮';
+        }
+
+        function syncTurns() {
+            if (!mediaEl) return;
+            const t = mediaEl.currentTime;
+            let curEl = null;
+            for (const el of turnEls) {
+                const start = parseFloat(el.dataset.startRt);
+                const end = parseFloat(el.dataset.endRt || el.dataset.startRt);
+                if (start <= t) {
+                    el.classList.add('played');
+                    if (end >= t - 0.5) curEl = el;
+                } else {
+                    el.classList.remove('played');
+                }
+                el.classList.remove('current');
+            }
+            if (curEl) {
+                curEl.classList.add('current');
+                // 自动滚动当前 turn 进视野(仅当不在视野内)
+                const rect = curEl.getBoundingClientRect();
+                const parent = curEl.parentElement.getBoundingClientRect();
+                if (rect.top < parent.top || rect.bottom > parent.bottom) {
+                    curEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+        }
+
+        function setMediaPill(kind) {
+            const pill = $('mediaPill');
+            const txt = $('mediaText');
+            pill.classList.remove('good', 'warn', 'bad');
+            if (kind === 'video') { pill.classList.add('good'); txt.textContent = 'MP4 视频'; }
+            else if (kind === 'audio') { pill.classList.add('warn'); txt.textContent = 'M4A 音频'; }
+            else { pill.classList.add('bad'); txt.textContent = '无成品'; }
+        }
+
+        async function load() {
+            const media = await probeMedia();
+            const slot = $('mediaPanel');
+
+            if (!media) {
+                setMediaPill(null);
+                slot.innerHTML =
+                    '<div class="no-media">'
+                    + '<div class="big">🎞</div>'
+                    + '<div class="msg">未找到 <code>live_session.mp4</code> 或 <code>live_session.m4a</code>。<br><br>'
+                    + '可能是会话太短被跳过、ffmpeg 失败,或这是旧版录制。</div>'
+                    + '</div>';
+            } else if (media.kind === 'video') {
+                setMediaPill('video');
+                slot.innerHTML =
+                    '<video id="m" controls preload="metadata" src="' + media.path + '"></video>'
+                    + '<div class="media-overlay">🎥 回放 · ' + sid.slice(0, 20) + '</div>';
+                mediaEl = $('m');
+            } else {
+                setMediaPill('audio');
+                slot.innerHTML =
+                    '<div class="audio-wrap">'
+                    + '<div class="big">🎧</div>'
+                    + '<div class="lbl">audio-only session</div>'
+                    + '<audio id="m" controls preload="metadata" src="' + media.path + '"></audio>'
+                    + '</div>';
+                mediaEl = $('m');
+            }
+
+            // 下载区
+            const dl = $('downloads');
+            dl.innerHTML =
+                '<a class="dl" href="/api/session/' + sid + '/user_audio.wav" download>⬇ user.wav</a>'
+                + '<a class="dl" href="/api/session/' + sid + '/ai_audio.wav" download>⬇ ai.wav</a>'
+                + '<a class="dl" href="/api/session/' + sid + '/events" download>⬇ events.jsonl</a>';
+
+            // 字幕
+            let events = [];
+            try {
+                const r = await fetch('/api/session/' + sid + '/events');
+                events = (await r.json()).events || [];
+            } catch (e) { console.warn(e); }
+            buildTurns(events);
+
+            // 底部统计
+            if (events.length) {
+                const t0 = events[0].t, tN = events[events.length - 1].t;
+                $('footerInfo').textContent =
+                    '事件数 ' + events.length + ' · 时长 ' + fmt(tN - t0);
+            } else {
+                $('footerInfo').textContent = '无事件';
+            }
+
+            if (mediaEl) {
+                mediaEl.addEventListener('timeupdate', syncTurns);
+                mediaEl.addEventListener('seeked', syncTurns);
+            }
+        }
+
+        load();
+    </script>
+</body>
+</html>

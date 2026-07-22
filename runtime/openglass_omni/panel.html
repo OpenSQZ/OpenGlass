@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenGlass Omni Runtime</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel-2: #0f141b;
+      --line: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --blue: #2f81f7;
+      --green: #2da44e;
+      --red: #f85149;
+      --amber: #d29922;
+      --violet: #8250df;
+    }
+    * { box-sizing: border-box; letter-spacing: 0; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 14px;
+    }
+    button, select, textarea { font: inherit; }
+    button, select {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    button {
+      padding: 0 16px;
+      color: #fff;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .45; cursor: default; }
+    button:not(:disabled):hover { filter: brightness(1.1); }
+    .app {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto 220px;
+      gap: 12px;
+      width: 100%;
+      height: 100%;
+      padding: 16px;
+    }
+    .surface { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+    .toolbar {
+      min-height: 76px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 14px 18px;
+    }
+    .services { display: flex; gap: 18px; flex: 1 1 auto; min-width: 250px; }
+    .service { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+    .dot { width: 14px; height: 14px; border-radius: 50%; background: #484f58; }
+    .dot.running { background: var(--green); box-shadow: 0 0 10px rgba(45, 164, 78, .75); }
+    .dot.starting, .dot.stopping { background: var(--amber); }
+    .dot.crashed { background: var(--red); box-shadow: 0 0 10px rgba(248, 81, 73, .75); }
+    .field { display: flex; align-items: center; gap: 8px; color: var(--muted); white-space: nowrap; }
+    select { background: #21262d; color: var(--text); padding: 0 12px; }
+    .actions { display: flex; align-items: center; gap: 10px; }
+    .start { background: var(--green); }
+    .restart { background: var(--violet); }
+    .stop { background: var(--red); }
+    .secondary { background: #21262d; color: var(--muted); }
+    .divider { width: 1px; height: 40px; background: var(--line); margin: 0 4px; }
+    .workspace { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 12px; min-height: 0; }
+    .prompt-panel, .view-panel { min-height: 0; padding: 16px; }
+    .prompt-panel { display: flex; flex-direction: column; }
+    .section-title { margin: 0 0 12px; color: var(--muted); font-size: 13px; text-transform: uppercase; }
+    .presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .preset { min-height: 36px; padding: 0 12px; background: #21262d; color: var(--text); font-weight: 500; }
+    .preset.active { background: var(--blue); border-color: var(--blue); }
+    textarea {
+      width: 100%;
+      min-height: 130px;
+      flex: 1 1 auto;
+      resize: none;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0d1117;
+      color: var(--text);
+      padding: 12px;
+      line-height: 1.6;
+    }
+    .apply { width: 100%; margin-top: 12px; background: var(--blue); }
+    .view-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+    .view-head { display: flex; align-items: center; justify-content: space-between; }
+    .view-frame { min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #e7e9ec; }
+    iframe { display: block; width: 100%; height: 100%; border: 0; }
+    .banner { min-height: 58px; display: flex; align-items: center; gap: 10px; padding: 12px 18px; }
+    .banner strong { font-size: 17px; }
+    .banner.ok strong { color: var(--green); }
+    .banner.warn strong { color: var(--amber); }
+    .banner.error strong { color: var(--red); }
+    .banner-detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .logs { display: grid; grid-template-rows: 42px minmax(0, 1fr); min-height: 0; overflow: hidden; }
+    .log-head { display: flex; align-items: end; gap: 6px; padding: 6px 10px 0; border-bottom: 1px solid var(--line); }
+    .tab { min-height: 32px; padding: 0 12px; background: transparent; color: var(--muted); font-weight: 500; border-color: transparent; }
+    .tab.active { color: var(--text); border-color: var(--blue); background: #121820; }
+    .autoscroll { margin-left: auto; align-self: center; color: var(--muted); font-size: 12px; }
+    pre {
+      margin: 0;
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      padding: 10px 14px;
+      color: #aeb8c4;
+      background: var(--panel-2);
+      font: 12px/1.55 Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    @media (max-width: 1160px) {
+      .toolbar { flex-wrap: wrap; }
+      .services { flex-basis: 100%; }
+      .workspace { grid-template-columns: 320px minmax(0, 1fr); }
+      .app { grid-template-rows: auto minmax(0, 1fr) auto 190px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="toolbar surface">
+      <div class="services" id="services"></div>
+      <label class="field">链路
+        <select aria-label="链路"><option>ESP32 眼镜</option></select>
+      </label>
+      <label class="field">眼镜
+        <select id="device" aria-label="眼镜"></select>
+      </label>
+      <div class="actions">
+        <button class="start" onclick="startAll()" title="启动 worker、gateway 和 OpenGlass bridge">▶ 一键启动</button>
+        <button class="restart" onclick="restartDemo()" title="只重启 OpenGlass bridge，并应用当前 Prompt">↻ 重启</button>
+        <button class="stop" onclick="stopDemo()" title="只停止 OpenGlass bridge，保留模型与 gateway">■ 停止</button>
+        <span class="divider"></span>
+        <button class="secondary" onclick="restartAll()" title="重启所有托管进程">全部重启</button>
+        <button class="secondary" onclick="stopAll()" title="停止 worker、gateway、bridge 及 worker 子进程">全部停止</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <aside class="prompt-panel surface">
+        <h2 class="section-title">场景 Prompt</h2>
+        <div class="presets" id="presets"></div>
+        <textarea id="prompt" aria-label="Prompt"></textarea>
+        <button class="apply" onclick="restartDemo()">用此 Prompt 重启 Demo</button>
+      </aside>
+      <section class="view-panel surface">
+        <div class="view-head"><h2 class="section-title">第一视角</h2></div>
+        <div class="view-frame"><iframe id="fpv" title="OpenGlass 第一视角"></iframe></div>
+      </section>
+    </section>
+
+    <section class="banner surface warn" id="banner">
+      <strong id="bannerTitle">正在检查运行环境</strong>
+      <span class="banner-detail" id="bannerDetail"></span>
+    </section>
+
+    <section class="logs surface">
+      <div class="log-head" id="tabs">
+        <label class="autoscroll"><input type="checkbox" id="autoscroll" checked> 自动滚到底</label>
+      </div>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+  <script>
+    const procNames = ['worker', 'gateway', 'demo'];
+    const allLogNames = ['system', ...procNames];
+    let currentTab = 'system';
+    let config = null;
+    let lastLogs = {};
+
+    function selectedDevice() { return document.getElementById('device').value || null; }
+    function selectedPrompt() { return document.getElementById('prompt').value.trim(); }
+
+    async function init() {
+      config = await pywebview.api.get_config();
+      renderServices();
+      renderDevices();
+      renderPrompts();
+      renderTabs();
+      document.getElementById('fpv').src = config.fpv_url;
+      renderPreflight(config.preflight || []);
+      setInterval(poll, 700);
+      await poll();
+    }
+
+    function renderServices() {
+      const labels = {worker: 'worker', gateway: 'gateway', demo: 'OpenGlass'};
+      document.getElementById('services').innerHTML = procNames.map(name =>
+        `<div class="service"><span class="dot" id="dot-${name}"></span><span>${labels[name]}</span></div>`
+      ).join('');
+    }
+
+    function renderDevices() {
+      const select = document.getElementById('device');
+      select.innerHTML = (config.devices || []).map(name => `<option>${escapeHtml(name)}</option>`).join('');
+    }
+
+    function renderPrompts() {
+      const entries = Object.entries(config.prompts || {});
+      const area = document.getElementById('prompt');
+      const holder = document.getElementById('presets');
+      holder.innerHTML = '';
+      entries.forEach(([name, value], index) => {
+        const button = document.createElement('button');
+        button.className = 'preset' + (index === 0 ? ' active' : '');
+        button.textContent = name;
+        button.onclick = () => {
+          document.querySelectorAll('.preset').forEach(item => item.classList.remove('active'));
+          button.classList.add('active');
+          area.value = value;
+        };
+        holder.appendChild(button);
+      });
+      if (entries.length) area.value = entries[0][1];
+    }
+
+    function renderTabs() {
+      const holder = document.getElementById('tabs');
+      const anchor = holder.querySelector('.autoscroll');
+      allLogNames.forEach(name => {
+        const button = document.createElement('button');
+        button.className = 'tab' + (name === currentTab ? ' active' : '');
+        button.textContent = name;
+        button.onclick = () => {
+          currentTab = name;
+          document.querySelectorAll('.tab').forEach(item => item.classList.remove('active'));
+          button.classList.add('active');
+          renderLog();
+        };
+        holder.insertBefore(button, anchor);
+      });
+    }
+
+    function renderPreflight(findings) {
+      const errors = findings.filter(item => item.level === 'error');
+      const warnings = findings.filter(item => item.level === 'warning');
+      const banner = document.getElementById('banner');
+      const title = document.getElementById('bannerTitle');
+      const detail = document.getElementById('bannerDetail');
+      banner.className = 'banner surface ' + (errors.length ? 'error' : warnings.length ? 'warn' : 'ok');
+      title.textContent = errors.length ? '环境检查失败' : warnings.length ? '环境可用，存在提醒' : '运行环境已就绪';
+      detail.textContent = (errors.length ? errors : warnings).map(item => item.message).join('；');
+    }
+
+    async function poll() {
+      try {
+        const state = await pywebview.api.poll();
+        procNames.forEach(name => {
+          const dot = document.getElementById(`dot-${name}`);
+          dot.className = 'dot ' + (state.status[name] || 'stopped');
+        });
+        lastLogs = state.logs || {};
+        renderLog();
+      } catch (_) {}
+    }
+
+    function renderLog() {
+      const pre = document.getElementById('log');
+      pre.textContent = (lastLogs[currentTab] || []).join('\n');
+      if (document.getElementById('autoscroll').checked) pre.scrollTop = pre.scrollHeight;
+    }
+
+    async function startAll() { await pywebview.api.start_all(selectedDevice()); }
+    async function stopAll() { await pywebview.api.stop_all(); }
+    async function restartAll() { await pywebview.api.restart_all(selectedDevice()); }
+    async function stopDemo() { await pywebview.api.stop_demo(); }
+    async function restartDemo() { await pywebview.api.restart_demo(selectedPrompt(), selectedDevice()); }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+    }
+
+    window.addEventListener('pywebviewready', init);
+  </script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "status": "observed-locally-not-clean-machine-validated",
+  "observed_at": "2026-07-16",
+  "dependencies": {
+    "MiniCPM-o-Demo": {
+      "repository": "https://github.com/OpenBMB/MiniCPM-o-Demo.git",
+      "branch": "Comni",
+      "commit": "9af4308"
+    },
+    "llama.cpp-omni": {
+      "repository": "https://github.com/tc-mb/llama.cpp-omni.git",
+      "branch": "feat/web-demo",
+      "commit": "5202b7b"
+    }
+  }
+}
