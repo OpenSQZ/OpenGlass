@@ -1,0 +1,33 @@
+{
+  "_comment": "Copy to runtime.local.json. Paths are resolved relative to this file and may use environment variables.",
+  "python": "",
+  "minicpm_demo_root": "${MINICPM_O_DEMO_ROOT}",
+  "llama_cpp_omni_root": "${LLAMA_CPP_OMNI_ROOT}",
+  "devices_file": "devices.local.json",
+  "prompts_file": "prompts.json",
+  "state_dir": "state",
+  "worker": {
+    "host": "127.0.0.1",
+    "port": 22440,
+    "ready_timeout_s": 180
+  },
+  "gateway": {
+    "host": "127.0.0.1",
+    "bind_host": "0.0.0.0",
+    "port": 8040,
+    "tls": true,
+    "certfile": "certs/cert.pem",
+    "keyfile": "certs/key.pem",
+    "ready_timeout_s": 45
+  },
+  "demo": {
+    "ui_host": "127.0.0.1",
+    "ui_port": 8080,
+    "audio_endpoint": "/ws_audio",
+    "image_min_interval_s": 0.8,
+    "player_hostapi": "wasapi",
+    "player_prebuffer_ms": 200,
+    "connect_wait_s": 120,
+    "ready_timeout_s": 20
+  }
+}

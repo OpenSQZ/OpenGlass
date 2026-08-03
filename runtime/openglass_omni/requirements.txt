@@ -1,0 +1,7 @@
+# OpenGlass-owned panel and ESP32 bridge dependencies.
+# Install MiniCPM-o-Demo's own requirements separately in the same environment.
+aiohttp>=3.9
+numpy>=1.24
+Pillow>=10.0
+pywebview>=4.4
+sounddevice>=0.4.6

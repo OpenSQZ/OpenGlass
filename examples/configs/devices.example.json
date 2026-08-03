@@ -1,0 +1,17 @@
+{
+  "_comment": "Illustrative registry consumed by the OpenGlass Omni launcher. TEST-NET addresses are examples only; copy this file to a local ignored config before use.",
+  "devices": [
+    {
+      "name": "OpenGlass-Primary",
+      "esp32_host": "192.0.2.10",
+      "esp32_port": 80,
+      "rotate": 270
+    },
+    {
+      "name": "OpenGlass-Secondary",
+      "esp32_host": "192.0.2.11",
+      "esp32_port": 80,
+      "rotate": 0
+    }
+  ]
+}

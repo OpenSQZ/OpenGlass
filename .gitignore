@@ -1,0 +1,82 @@
+# Private planning and source context
+_codex_context/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.key
+*.pem
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+.venv/
+venv/
+env/
+
+# Build, test, and notebook caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# IDE and OS artifacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Evaluation outputs
+eval_benchmark/runs/
+eval_benchmark/tables/
+eval_benchmark/figures/generated/
+eval_benchmark/**/*.log
+
+# Runtime logs and session recordings
+logs/
+runtime/logs/
+runtime/sessions/
+runtime/**/logs/
+runtime/**/sessions/
+runtime/openglass_omni/state/
+sessions/
+recordings/
+captures/
+*.log
+*.jsonl.tmp
+*.pcm
+*.wav
+*.mp3
+
+# Model weights and accelerator artifacts
+*.gguf
+*.safetensors
+*.pth
+*.pt
+*.onnx
+*.engine
+
+# Local device configuration
+devices.json
+devices.local.json
+*.device.local.json
+runtime/openglass_omni/runtime.local.json
+
+# Local Wi-Fi configuration headers
+esp32_wifi.h
+wifi_config.h
+CameraWebServer_PDM_Audio/esp32_wifi.h
+CameraWebServer_PDM_Audio/wifi_config.h
+
+# Temporary media and scratch outputs
+tmp/
+*.tmp
+*.tmp.mp4
+*.tmp.mov
+*.tmp.avi
+*.scratch.*

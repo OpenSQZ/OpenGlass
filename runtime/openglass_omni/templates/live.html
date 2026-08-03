@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 眼镜 · 实时演示</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#0a0e1a;color:#e8ecf4;overflow:hidden}
+  .app{display:grid;grid-template-rows:auto 1fr auto;height:100vh}
+
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:linear-gradient(180deg,#0f1629 0%,transparent 100%);border-bottom:1px solid rgba(255,255,255,.06);z-index:10}
+  .brand{display:flex;align-items:center;gap:12px;font-size:16px;font-weight:600}
+  .brand-icon{font-size:26px}
+  .brand-sub{color:#8a93a8;font-weight:400;font-size:12px;margin-top:2px}
+  .header-right{display:flex;align-items:center;gap:10px}
+  .pill{padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.06);font-size:12px;color:#b5bdd0;display:inline-flex;align-items:center;gap:6px}
+  .pill.good{color:#5dd39e}.pill.warn{color:#f6c177}.pill.bad{color:#eb6f92}
+  .dot{width:8px;height:8px;border-radius:50%;background:currentColor}
+  .dot.pulse{animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .icon-btn{background:transparent;border:1px solid rgba(255,255,255,.1);color:#b5bdd0;padding:7px 13px;border-radius:8px;cursor:pointer;font-size:12px;text-decoration:none;transition:all .15s}
+  .icon-btn:hover{border-color:rgba(255,255,255,.3);color:#fff}
+
+  main{display:grid;grid-template-columns:1.4fr 1fr;gap:20px;padding:20px 24px;min-height:0}
+  @media (max-width:900px){main{grid-template-columns:1fr;grid-template-rows:1fr 1fr}}
+
+  .camera-panel{position:relative;background:#000;border-radius:16px;overflow:hidden;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.06)}
+  .camera-panel img{width:100%;height:100%;object-fit:cover}
+  .camera-placeholder{color:#6b7490;font-size:14px;text-align:center;padding:40px}
+  .camera-placeholder .big{font-size:40px;margin-bottom:12px;opacity:.5}
+  .camera-overlay{position:absolute;inset:0;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between;padding:14px}
+  .cam-tag{align-self:flex-start;background:rgba(0,0,0,.5);backdrop-filter:blur(8px);padding:6px 12px;border-radius:8px;font-size:12px;color:#fff;letter-spacing:.5px;display:flex;align-items:center;gap:8px}
+  .cam-tag .rec{color:#eb6f92;animation:pulse 1.4s ease-in-out infinite}
+  .cam-bottom{align-self:stretch;display:flex;justify-content:space-between;align-items:flex-end;gap:10px}
+  .sensor-row{display:flex;gap:8px;opacity:0;transition:opacity .3s}
+  .sensor-row.on{opacity:1}
+  .sensor-chip{background:rgba(0,0,0,.5);backdrop-filter:blur(8px);padding:6px 12px;border-radius:8px;font-size:12px;color:#dfe6f5}
+  .mic-level{display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.5);backdrop-filter:blur(8px);padding:6px 12px;border-radius:8px;font-size:11px;color:#b5bdd0}
+  .mic-bar{width:100px;height:6px;background:rgba(255,255,255,.1);border-radius:3px;overflow:hidden}
+  .mic-bar-fill{height:100%;background:linear-gradient(90deg,#5dd39e,#f6c177,#eb6f92);width:0%;transition:width .1s}
+
+  .convo-panel{background:rgba(255,255,255,.03);border-radius:16px;border:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;min-height:0}
+  .convo-head{padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.06);font-size:13px;color:#8a93a8;display:flex;justify-content:space-between;align-items:center}
+  .convo-body{flex:1;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:14px;scroll-behavior:smooth}
+  .convo-body::-webkit-scrollbar{width:6px}
+  .convo-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:3px}
+  .msg{max-width:88%;padding:12px 16px;border-radius:14px;font-size:17px;line-height:1.5;animation:fadeUp .3s ease}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  .msg.user{align-self:flex-end;background:#2a3350;color:#e8ecf4;border-bottom-right-radius:4px}
+  .msg.ai{align-self:flex-start;background:linear-gradient(135deg,#3b5bdb 0%,#6741d9 100%);color:#fff;border-bottom-left-radius:4px}
+  /* KV prune 系统事件:居中、窄、暗琥珀、等宽字体,刻意区别于左右对话气泡 */
+  .msg.kv{align-self:center;max-width:82%;padding:6px 14px;border-radius:999px;
+    background:rgba(217,119,6,.10);border:1px dashed rgba(245,158,11,.45);
+    color:#f0b45a;font-size:12.5px;line-height:1.4;letter-spacing:.02em;
+    font-family:'SF Mono',ui-monospace,Menlo,Consolas,monospace;text-align:center;opacity:.92}
+  .msg.kv b{color:#fcd34d;font-weight:600}
+  .msg .who{font-size:11px;opacity:.7;margin-bottom:4px}
+  .msg.streaming .body::after{content:'▊';animation:blink 1s infinite;margin-left:2px}
+  @keyframes blink{50%{opacity:0}}
+  .convo-empty{margin:auto;color:#4a556f;font-size:14px;text-align:center}
+
+  footer{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;gap:20px;background:linear-gradient(0deg,#0f1629 0%,transparent 100%);border-top:1px solid rgba(255,255,255,.06)}
+  .tts-indicator{display:flex;align-items:center;gap:12px;color:#8a93a8;font-size:13px}
+  .tts-indicator.on{color:#5dd39e}
+  .waveform{display:flex;gap:3px;align-items:center;height:22px}
+  .waveform span{width:3px;background:currentColor;border-radius:2px;height:20%;transition:height .1s}
+  .tts-indicator.on .waveform span{animation:wave 1s ease-in-out infinite}
+  .waveform span:nth-child(1){animation-delay:0s}
+  .waveform span:nth-child(2){animation-delay:.1s}
+  .waveform span:nth-child(3){animation-delay:.2s}
+  .waveform span:nth-child(4){animation-delay:.3s}
+  .waveform span:nth-child(5){animation-delay:.4s}
+  @keyframes wave{0%,100%{height:20%}50%{height:100%}}
+  .actions{display:flex;gap:8px}
+  .btn{padding:8px 16px;border-radius:8px;font-size:13px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:#e8ecf4;cursor:pointer;transition:all .15s}
+  .btn:hover{background:rgba(255,255,255,.08)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.danger{color:#eb6f92;border-color:rgba(235,111,146,.3)}
+  .btn.danger:hover{background:rgba(235,111,146,.1)}
+
+  .barge-flash{position:fixed;top:80px;left:50%;transform:translateX(-50%) translateY(-10px);background:linear-gradient(135deg,#f6c177,#eb6f92);color:#1a1a2e;padding:10px 22px;border-radius:999px;font-weight:600;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:100;box-shadow:0 8px 32px rgba(235,111,146,.4)}
+  .barge-flash.on{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  .eng-panel{position:fixed;top:0;right:0;bottom:0;width:320px;background:rgba(10,14,26,.95);backdrop-filter:blur(12px);border-left:1px solid rgba(255,255,255,.08);padding:20px;transform:translateX(100%);transition:transform .25s ease;overflow-y:auto;z-index:50}
+  .eng-panel.on{transform:translateX(0)}
+  .eng-panel h3{font-size:13px;color:#8a93a8;margin:14px 0 10px;font-weight:500}
+  .eng-panel h3:first-child{margin-top:0}
+  .metrics{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .metric{background:rgba(255,255,255,.03);padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.05)}
+  .metric-label{font-size:11px;color:#6b7490;margin-bottom:4px}
+  .metric-value{font-size:17px;font-weight:600;color:#e8ecf4;font-family:'SF Mono',monospace}
+  .shortcuts{color:#4a556f;font-size:11px;line-height:1.7;margin-top:16px}
+
+  .blind-mode{position:fixed;inset:0;background:#000;z-index:200;display:none;flex-direction:column;align-items:center;justify-content:center;padding:40px}
+  .blind-mode.on{display:flex}
+  .blind-hint{position:absolute;top:24px;left:50%;transform:translateX(-50%);color:#555;font-size:12px}
+  .blind-who{font-size:16px;color:#666;margin-bottom:20px;text-align:center}
+  .blind-sub{font-size:44px;line-height:1.4;text-align:center;max-width:1000px;color:#fff;font-weight:300}
+  .blind-tts{position:absolute;bottom:40px;display:flex;gap:5px;align-items:center;height:30px}
+  .blind-tts span{width:5px;background:#5dd39e;border-radius:3px;animation:wave 1s ease-in-out infinite}
+  .blind-tts span:nth-child(2){animation-delay:.1s}
+  .blind-tts span:nth-child(3){animation-delay:.2s}
+  .blind-tts span:nth-child(4){animation-delay:.3s}
+  .blind-tts span:nth-child(5){animation-delay:.4s}
+
+  .confirm-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:300}
+  .confirm-bg.on{display:flex}
+  .confirm-box{background:#1a2036;border:1px solid rgba(255,255,255,.1);padding:24px;border-radius:12px;max-width:380px}
+  .confirm-box h4{margin-bottom:10px;font-size:16px}
+  .confirm-box p{color:#8a93a8;font-size:13px;margin-bottom:18px;line-height:1.5}
+  .confirm-actions{display:flex;gap:10px;justify-content:flex-end}
+
+  /* ── 输入健康诊断 ── */
+  .health-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+  .health-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;font-size:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);color:#b5bdd0}
+  .health-chip .hdot{width:8px;height:8px;border-radius:50%;background:#6b7490}
+  .health-chip.good .hdot{background:#5dd39e}
+  .health-chip.warn .hdot{background:#f6c177}
+  .health-chip.bad  .hdot{background:#eb6f92}
+  .health-chip.bad{color:#eb6f92}
+  .health-chip.warn{color:#f6c177}
+  /* 音频滑窗柱状图 */
+  .db-spark{display:flex;align-items:flex-end;gap:2px;height:46px;padding:6px 8px;background:rgba(255,255,255,.03);border-radius:8px;border:1px solid rgba(255,255,255,.05);margin-top:4px}
+  .db-spark .bar{flex:1;min-width:3px;background:#4a556f;border-radius:2px 2px 0 0;height:4%;transition:height .15s,background .15s}
+  .db-spark .bar.silent{background:#4a556f}
+  .db-spark .bar.noise{background:#f6c177}
+  .db-spark .bar.voice{background:#5dd39e}
+  /* 顶部输入故障警示丸 */
+  .pill.alarm{color:#eb6f92;background:rgba(235,111,146,.12);display:none}
+  .pill.alarm.on{display:inline-flex}</style>
+</head>
+<body>
+
+<div class="app">
+  <header>
+    <div class="brand">
+      <span class="brand-icon">🕶</span>
+      <div>
+        <div>AI 眼镜 · 实时演示</div>
+        <div class="brand-sub">Real-time multimodal assistant for the visually impaired</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <span class="pill" id="latencyPill" title="端到端延迟 (cost_all_p95)">
+        <span class="dot pulse"></span><span id="latencyText">连接中…</span>
+      </span>
+      <span class="pill" id="statusPill">
+        <span class="dot"></span><span id="statusText">待连接</span>
+      </span>
+      <span class="pill alarm" id="inputAlarm" title="输入源异常">
+        <span class="dot"></span><span id="inputAlarmText">输入异常</span>
+      </span>
+      <a class="icon-btn" href="/replay">📁 历史</a>
+      <button class="icon-btn" id="engToggle" title="按 D 快捷">⚙ 调试</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="camera-panel" aria-label="眼镜摄像头画面">
+      <img id="cam" alt="" style="display:none">
+      <div class="camera-placeholder" id="camPh">
+        <div class="big">📷</div>
+        <div>等待眼镜画面…</div>
+      </div>
+      <div class="camera-overlay">
+        <span class="cam-tag"><span class="rec">●</span> LIVE · 眼镜第一视角</span>
+        <div class="cam-bottom">
+          <div class="sensor-row" id="sensorRow">
+            <span class="sensor-chip" id="distChip">📡 前方 -- m</span>
+            <span class="sensor-chip" id="headChip">🧭 朝向 --°</span>
+          </div>
+          <div class="mic-level" title="用户麦 dBFS">
+            <span>🎤</span>
+            <div class="mic-bar"><div class="mic-bar-fill" id="micFill"></div></div>
+            <span id="micDb">-- dB</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="convo-panel" aria-label="对话记录">
+      <div class="convo-head">
+        <span>💬 对话</span>
+        <span id="convoCount">0 轮</span>
+      </div>
+      <div class="convo-body" id="convo">
+        <div class="convo-empty" id="convoEmpty">开始说话以与 AI 眼镜互动…</div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="tts-indicator" id="ttsInd">
+      <span id="ttsLabel">AI 静默中</span>
+      <div class="waveform"><span></span><span></span><span></span><span></span><span></span></div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="eyesBtn" title="按 E 快捷">👁 闭眼体验</button>
+      <button class="btn danger" id="stopBtn">⏹ 停止并保存</button>
+    </div>
+  </footer>
+</div>
+
+<div class="barge-flash" id="bargeFlash">⚡ 用户打断了 AI</div>
+
+<aside class="eng-panel" id="engPanel" aria-hidden="true">
+  <h3>实时指标</h3>
+  <div class="metrics">
+    <div class="metric"><div class="metric-label">Player pending</div><div class="metric-value" id="mPending">–</div></div>
+    <div class="metric"><div class="metric-label">LLM p95</div><div class="metric-value" id="mLlm">–</div></div>
+    <div class="metric"><div class="metric-label">All p95</div><div class="metric-value" id="mAll">–</div></div>
+    <div class="metric"><div class="metric-label">KV cache</div><div class="metric-value" id="mKv">–</div></div>
+    <div class="metric"><div class="metric-label">Barge events</div><div class="metric-value" id="mBarge">0</div></div>
+    <div class="metric"><div class="metric-label">User dBFS</div><div class="metric-value" id="mDbfs">–</div></div>
+    <div class="metric"><div class="metric-label">Chunks</div><div class="metric-value" id="mChunks">0</div></div>
+    <div class="metric"><div class="metric-label">Muted / BT</div><div class="metric-value" id="mMute">–</div></div>
+  </div>
+  <h3>输入健康</h3>
+  <div class="health-row">
+    <span class="health-chip" id="hCam"><span class="hdot"></span><span id="hCamText">摄像头 –</span></span>
+    <span class="health-chip" id="hSent"><span class="hdot"></span><span id="hSentText">送图 –</span></span>
+    <span class="health-chip" id="hAud"><span class="hdot"></span><span id="hAudText">音频 –</span></span>
+  </div>
+  <div class="db-spark" id="dbSpark" title="最近 20 秒用户麦能量(灰=静音 黄=噪声 绿=人声)"></div>
+
+  <h3>传感器(预留)</h3>
+  <div class="metrics">
+    <div class="metric"><div class="metric-label">距离</div><div class="metric-value" id="mDist">–</div></div>
+    <div class="metric"><div class="metric-label">朝向</div><div class="metric-value" id="mHead">–</div></div>
+    <div class="metric"><div class="metric-label">Pitch / Yaw</div><div class="metric-value" id="mImu">–</div></div>
+  </div>
+  <div class="shortcuts">
+    快捷键<br>
+    D · 调试面板 &nbsp;&nbsp; E · 闭眼体验<br>
+    Esc · 退出闭眼
+  </div>
+</aside>
+
+<div class="blind-mode" id="blindMode" aria-hidden="true">
+  <div class="blind-hint">闭眼体验 · 感受盲人通过 AI 眼镜听到的世界 · 按 Esc 退出</div>
+  <div>
+    <div class="blind-who" id="blindWho">等待 AI 描述…</div>
+    <div class="blind-sub" id="blindSub">…</div>
+  </div>
+  <div class="blind-tts" id="blindTts" style="display:none">
+    <span></span><span></span><span></span><span></span><span></span>
+  </div>
+</div>
+
+<div class="confirm-bg" id="confirmBg">
+  <div class="confirm-box">
+    <h4>停止并保存?</h4>
+    <p>将立即结束本次会话,并把视频 / 音频 / 字幕打包写盘。确认后无法恢复。</p>
+    <div class="confirm-actions">
+      <button class="btn" id="confirmNo">取消</button>
+      <button class="btn danger" id="confirmYes">确认停止</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================================================================
+ * 与 bridge_ui.py 对齐的事件契约(v5.2.6)
+ * ----------------------------------------------------------------
+ * session_start : { type, session_id }
+ * chunk         : { type, idx, ts, muted, bt, img_b64(null|str), user_db,
+ *                    img_fetch_ok, img_age_ms, img_sent, audio_silent }
+ * result        : { type, is_listen, end_of_turn, text }        // text 是增量
+ * stats         : { type, player_pending_ms, cost_llm_p95,
+ *                   cost_all_p95, barge_events, kv }
+ * sensor        : { type, distance_m, heading_deg, pitch_deg, yaw_deg }
+ *                 // ← 预留,后端还没发
+ * ================================================================ */
+
+const WS_PATH = '/live_ws';   // ← 若 bridge_ui.py 路径不同(如 /live_ws),改这里一行
+const TTS_IDLE_MS = 1200;
+const BARGE_FLASH_COOLDOWN_MS = 2000;
+
+// ── 输入健康诊断阈值(与后端对齐) ──
+const IMG_FRESH_MS = 2000;    // < 2s 摄像头健康(绿)
+const IMG_WARN_MS  = 10000;   // 2~10s 偏旧(黄), >10s 掉线(红)
+const AUDIO_SILENT_DB = -50;  // 与后端 AUDIO_SILENT_DB 一致
+const AUDIO_VOICE_DB  = -35;  // > -35 视为有效人声(绿), 中间为环境噪声(黄)
+const SPARK_BARS = 20;        // 音频滑窗柱数(≈20 秒)
+let dbHistory = [];           // 最近 user_db 序列
+
+const $ = id => document.getElementById(id);
+const convo = $('convo'), convoEmpty = $('convoEmpty');
+
+let ws = null;
+let curMsg = null, curIsListen = null;
+let turnCount = 0;
+let lastAiRecvTs = 0, lastBtState = false, lastBargeFlashTs = 0;
+let lastBargeEvents = 0;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}${WS_PATH}`);
+  ws.onopen    = () => setStatus('已连接,等待会话', 'warn');
+  ws.onclose   = () => { setStatus('已断开', 'bad'); $('inputAlarm').classList.remove('on'); setTimeout(connect, 2000); };
+  ws.onerror   = () => setStatus('连接异常', 'bad');
+  ws.onmessage = e => { try { dispatch(JSON.parse(e.data)); } catch(err){} };
+}
+
+function setStatus(text, kind) {
+  $('statusText').textContent = text;
+  $('statusPill').className = 'pill ' + (kind || '');
+}
+
+function dispatch(evt) {
+  switch (evt.type) {
+    case 'session_start': return onSessionStart(evt);
+    case 'chunk':         return onChunk(evt);
+    case 'result':        return onResult(evt);
+    case 'kv_prune':      return onKvPrune(evt);
+    case 'stats':         return onStats(evt);
+      case 'sensor': return onSensor(evt);
+      case 'stopping': return onStopping();
+      case 'mode': return onMode(evt);
+  }
+    }
+
+
+/* ---- mode (live / rerun) ---- */
+function onMode(e) {
+  if (e.mode !== 'rerun') return;
+  // 防止重复插入(WS 重连时 onMode 会再次触发)
+  if (document.getElementById('rerunTag')) return;
+  const tag = document.createElement('span');
+  tag.id = 'rerunTag';
+  tag.className = 'pill warn';
+  tag.style.background = 'rgba(246, 193, 119, 0.15)';
+  tag.style.color = '#f6c177';
+  tag.textContent = '🔁 RERUN · ' + (e.rerun_from || '');
+  tag.title = '当前是回放重跑模式，输入来自历史 session';
+  document.querySelector('.header-right').prepend(tag);
+  document.title = '🔁 ' + document.title;
+}
+
+/* ---- session ---- */
+function onSessionStart(e) {
+  setStatus('会话中 · ' + (e.session_id || ''), 'good');
+}
+
+/* ---- chunk (image + user mic + barge) ---- */
+function onChunk(e) {
+  // 图像:仅在 img_b64 非 null 时换帧
+  if (e.img_b64) {
+    $('cam').src = 'data:image/jpeg;base64,' + e.img_b64;
+    $('cam').style.display = 'block';
+    $('camPh').style.display = 'none';
+  }
+  // 用户麦音量条:user_db 一般在 -90 ~ -10 之间,映射到 0~100%
+  if (typeof e.user_db === 'number') {
+    const pct = Math.max(0, Math.min(100, (e.user_db + 60) * 100 / 50));
+    $('micFill').style.width = pct + '%';
+    $('micDb').textContent = e.user_db.toFixed(0) + ' dB';
+    $('mDbfs').textContent = e.user_db.toFixed(1);
+  }
+  // barge 上升沿 → 闪烁
+  if (e.bt && !lastBtState) {
+    const now = performance.now();
+    if (now - lastBargeFlashTs > BARGE_FLASH_COOLDOWN_MS) {
+      flashBarge();
+      lastBargeFlashTs = now;
+    }
+  }
+  lastBtState = !!e.bt;
+
+  $('mChunks').textContent = e.idx ?? '–';
+  $('mMute').textContent = (e.muted ? 'muted' : 'open') + (e.bt ? ' · BT' : '');
+
+  updateHealth(e);
+}
+
+/* ---- 输入健康诊断 ---- */
+function updateHealth(e) {
+  // 1) 摄像头健康(按 img_age_ms)
+  const age = (typeof e.img_age_ms === 'number') ? e.img_age_ms : -1;
+  const cam = $('hCam');
+  cam.classList.remove('good','warn','bad');
+  if (age < 0) {
+    cam.classList.add('bad');
+    $('hCamText').textContent = '摄像头 无图';
+  } else if (age < IMG_FRESH_MS) {
+    cam.classList.add('good');
+    $('hCamText').textContent = '摄像头 ' + (e.img_fetch_ok ? '正常' : (age + 'ms'));
+  } else if (age < IMG_WARN_MS) {
+    cam.classList.add('warn');
+    $('hCamText').textContent = '摄像头 旧帧 ' + (age/1000).toFixed(1) + 's';
+  } else {
+    cam.classList.add('bad');
+    $('hCamText').textContent = '摄像头 掉线 ' + (age/1000).toFixed(0) + 's';
+  }
+
+  // 2) 本 chunk 是否送图给模型
+  const sent = $('hSent');
+  sent.classList.remove('good','warn','bad');
+  if (e.img_sent) { sent.classList.add('good'); $('hSentText').textContent = '送图 ✓'; }
+  else { sent.classList.add('bad'); $('hSentText').textContent = '送图 ✗'; }
+
+  // 3) 音频静音
+  const aud = $('hAud');
+  aud.classList.remove('good','warn','bad');
+  const db = (typeof e.user_db === 'number') ? e.user_db : -120;
+  if (e.audio_silent || db < AUDIO_SILENT_DB) {
+    aud.classList.add('warn'); $('hAudText').textContent = '音频 静音';
+  } else if (db < AUDIO_VOICE_DB) {
+    aud.classList.add('warn'); $('hAudText').textContent = '音频 噪声';
+  } else {
+    aud.classList.add('good'); $('hAudText').textContent = '音频 有声';
+  }
+
+  // 4) 音频滑窗柱状图
+  dbHistory.push(db);
+  if (dbHistory.length > SPARK_BARS) dbHistory.shift();
+  renderSpark();
+
+  // 5) 顶部警示丸:摄像头掉线(>10s) 或 长时间无图
+  const alarm = $('inputAlarm');
+  if (age < 0 || age >= IMG_WARN_MS) {
+    alarm.classList.add('on');
+    $('inputAlarmText').textContent = (age < 0) ? '⚠ 无图像输入' : '⚠ 摄像头掉线 ' + (age/1000).toFixed(0) + 's';
+  } else {
+    alarm.classList.remove('on');
+  }
+}
+
+function renderSpark() {
+  const box = $('dbSpark');
+  // 补足柱子数量
+  while (box.children.length < dbHistory.length) {
+    const b = document.createElement('div');
+    b.className = 'bar';
+    box.appendChild(b);
+  }
+  while (box.children.length > dbHistory.length) box.removeChild(box.lastChild);
+  for (let i = 0; i < dbHistory.length; i++) {
+    const db = dbHistory[i];
+    const bar = box.children[i];
+    // -90dB→4% , -10dB→100%
+    const pct = Math.max(4, Math.min(100, (db + 90) * 100 / 80));
+    bar.style.height = pct + '%';
+    bar.className = 'bar ' + (db < AUDIO_SILENT_DB ? 'silent' : (db < AUDIO_VOICE_DB ? 'noise' : 'voice'));
+  }
+}
+
+/* ---- result (streaming text, delta-accumulated) ---- */
+function onResult(e) {
+  const text = e.text || '';
+  const isListen = !!e.is_listen;
+  const endOfTurn = !!e.end_of_turn;
+
+  // TTS 状态:AI 文本到达 → 说话中
+  if (!isListen && text) {
+    lastAiRecvTs = performance.now();
+    setTts(true);
+  }
+
+  if (text) {
+    // 新 turn:is_listen 切换 或 之前没开
+    if (!curMsg || curIsListen !== isListen) {
+      if (curMsg) curMsg.classList.remove('streaming');
+      convoEmpty.style.display = 'none';
+      curMsg = document.createElement('div');
+      curMsg.className = 'msg streaming ' + (isListen ? 'user' : 'ai');
+      const w = document.createElement('div');
+      w.className = 'who';
+      w.textContent = isListen ? '👤 用户' : '🤖 AI 眼镜';
+      const b = document.createElement('div');
+      b.className = 'body';
+      curMsg.appendChild(w); curMsg.appendChild(b);
+      convo.appendChild(curMsg);
+      curIsListen = isListen;
+      turnCount++;
+      $('convoCount').textContent = turnCount + ' 轮';
+    }
+    // 关键:delta 累加
+    const body = curMsg.querySelector('.body');
+    body.textContent = (body.textContent || '') + text;
+    convo.scrollTop = convo.scrollHeight;
+
+    // 闭眼模式同步
+    if ($('blindMode').classList.contains('on')) {
+      $('blindWho').textContent = isListen ? '👤 用户' : '🤖 AI 眼镜';
+      $('blindSub').textContent = body.textContent;
+    }
+  }
+
+  if (endOfTurn && curMsg) {
+    curMsg.classList.remove('streaming');
+    curMsg = null;
+    curIsListen = null;
+    if (!isListen) setTts(false);  // AI 轮次结束立刻停 TTS 指示
+  }
+}
+
+/* ---- TTS 指示(无后端事件,靠 idle timer) ---- */
+function setTts(on) {
+  $('ttsInd').classList.toggle('on', on);
+  $('ttsLabel').textContent = on ? 'AI 正在说话' : 'AI 静默中';
+  $('blindTts').style.display = on ? 'flex' : 'none';
+}
+setInterval(() => {
+  if ($('ttsInd').classList.contains('on')
+      && performance.now() - lastAiRecvTs > TTS_IDLE_MS) {
+    setTts(false);
+  }
+}, 300);
+
+/* ---- KV prune 事件:作为系统条目插入对话流,样式独立于对话气泡 ---- */
+function onKvPrune(e) {
+  convoEmpty.style.display = 'none';
+  // 断开当前流式气泡的光标(prune 打断了连续性)
+  if (curMsg) { curMsg.classList.remove('streaming'); curMsg = null; curIsListen = null; }
+  const el = document.createElement('div');
+  el.className = 'msg kv';
+  const prev = (e.prev ?? 0).toLocaleString();
+  const cur  = (e.cur  ?? 0).toLocaleString();
+  el.innerHTML = `\u2702 KV 滑窗裁剪 #${e.count ?? '?'} · <b>${prev}</b> \u2192 <b>${cur}</b> tokens`;
+  convo.appendChild(el);
+  convo.scrollTop = convo.scrollHeight;
+  // 顺带刷新调试面板的 KV 表盘(demo 未发 stats,这里补上当前水位)
+  const mk = $('mKv'); if (mk) mk.textContent = cur;
+}
+
+/* ---- stats ---- */
+function onStats(e) {
+  $('mPending').textContent = e.player_pending_ms != null ? e.player_pending_ms + ' ms' : '–';
+  $('mLlm').textContent     = e.cost_llm_p95     != null ? Math.round(e.cost_llm_p95) + ' ms' : '–';
+  $('mAll').textContent     = e.cost_all_p95     != null ? Math.round(e.cost_all_p95) + ' ms' : '–';
+  $('mKv').textContent      = e.kv ?? '–';
+  $('mBarge').textContent   = e.barge_events ?? 0;
+
+  // 顶部延迟丸
+  if (e.cost_all_p95 != null) {
+    const v = Math.round(e.cost_all_p95);
+    $('latencyText').textContent = '延迟 ' + v + ' ms';
+    const pill = $('latencyPill');
+    pill.classList.remove('good','warn','bad');
+    if      (v < 600)  pill.classList.add('good');
+    else if (v < 1200) pill.classList.add('warn');
+    else               pill.classList.add('bad');
+  }
+
+  // barge_events 增量也触发一次闪烁(兜底,以防错过 chunk.bt)
+  if (typeof e.barge_events === 'number' && e.barge_events > lastBargeEvents) {
+    const now = performance.now();
+    if (now - lastBargeFlashTs > BARGE_FLASH_COOLDOWN_MS) {
+      flashBarge();
+      lastBargeFlashTs = now;
+    }
+    lastBargeEvents = e.barge_events;
+  }
+}
+
+
+function onStopping() {
+    setStatus('会话结束,保存中…', 'warn');
+    $('stopBtn').textContent = '保存中…';
+    $('stopBtn').disabled = true;
+    setTts(false);
+}
+
+
+/* ---- sensor (预留) ---- */
+function onSensor(e) {
+  $('sensorRow').classList.add('on');
+  if (e.distance_m != null) {
+    $('distChip').textContent = `📡 前方 ${(+e.distance_m).toFixed(2)} m`;
+    $('mDist').textContent    = (+e.distance_m).toFixed(2) + ' m';
+  }
+  if (e.heading_deg != null) {
+    $('headChip').textContent = `🧭 朝向 ${Math.round(+e.heading_deg)}°`;
+    $('mHead').textContent    = Math.round(+e.heading_deg) + '°';
+  }
+  if (e.pitch_deg != null || e.yaw_deg != null) {
+    $('mImu').textContent = `${(+(e.pitch_deg??0)).toFixed(0)} / ${(+(e.yaw_deg??0)).toFixed(0)}`;
+  }
+}
+
+/* ---- barge flash ---- */
+function flashBarge() {
+  const f = $('bargeFlash');
+  f.classList.add('on');
+  setTimeout(() => f.classList.remove('on'), 1500);
+}
+
+/* ---- UI bindings ---- */
+$('engToggle').onclick = () => $('engPanel').classList.toggle('on');
+$('eyesBtn').onclick   = () => toggleBlind(true);
+document.addEventListener('keydown', e => {
+  if (e.key === 'd' || e.key === 'D') $('engPanel').classList.toggle('on');
+  if (e.key === 'e' || e.key === 'E') toggleBlind(true);
+  if (e.key === 'Escape') toggleBlind(false);
+});
+function toggleBlind(on) {
+  $('blindMode').classList.toggle('on', on);
+  $('blindMode').setAttribute('aria-hidden', on ? 'false' : 'true');
+}
+
+$('stopBtn').onclick    = () => $('confirmBg').classList.add('on');
+$('confirmNo').onclick  = () => $('confirmBg').classList.remove('on');
+/*$('confirmYes').onclick = async () => {
+  $('confirmBg').classList.remove('on');
+  $('stopBtn').textContent = '💾 保存中…';
+  $('stopBtn').disabled = true;
+  try { await fetch('/api/stop', { method: 'POST' }); } catch(e){}
+};*/
+$('confirmYes').onclick = async () => {
+    $('confirmBg').classList.remove('on');
+    try { await fetch('/api/stop', { method: 'POST' }); } catch (e) { }
+};
+
+connect();
+</script>
+</body>
+</html>
