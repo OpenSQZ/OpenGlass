@@ -6,9 +6,8 @@
 
 **An open research platform that separates wearable sensing from nearby-device multimodal inference.**
 
-[中文](README_ZN.md) · [Quickstart](docs/quickstart.md) · [Hardware](hardware/README.md) · [Omni Runtime](runtime/openglass_omni/README.md) · [Paper](papers/acl2026.md) · [Safety](docs/safety_privacy.md)
+[中文](README_zh.md) · [Quickstart](docs/quickstart.md) · [Hardware](hardware/README.md) · [Omni Runtime](runtime/openglass_omni/README.md) · [Paper](papers/acl2026.md) · [Safety](docs/safety_privacy.md)
 
-[![GitHub stars](https://img.shields.io/github/stars/OpenSQZ/OpenGlass?style=flat-square&color=111827)](https://github.com/OpenSQZ/OpenGlass/stargazers)
 ![Status](https://img.shields.io/badge/status-research_prototype-f59e0b?style=flat-square)
 ![Local first](https://img.shields.io/badge/inference-nearby_device_local-16a34a?style=flat-square)
 ![ESP32-S3](https://img.shields.io/badge/sensing-ESP32--S3-ef4444?style=flat-square)
@@ -55,189 +54,232 @@ flowchart LR
   ESP -->|"JPEG + PCM16 over local Wi-Fi"| BRIDGE["OpenGlass host bridge"]
 
   subgraph H["Nearby laptop / edge host"]
-    BRIDGE --> CORE["Core path\nASR → VLM → TTS"]
     BRIDGE --> OMNI["Omni path\nMiniCPM-o + llama.cpp-omni"]
-    CORE --> OUT["Spoken response"]
-    OMNI --> OUT
+    OMNI --> OUT["Spoken response"]
     BRIDGE --> SESSION["Logs + session replay"]
   end
 ```
 
-The tracked firmware currently exposes:
-
-| Interface | Endpoint | Purpose |
-| --- | --- | --- |
-| HTTP | `http://<ESP32_IP>/capture` | Single JPEG capture |
-| HTTP | `http://<ESP32_IP>:81/stream` | MJPEG preview stream |
-| WebSocket | `ws://<ESP32_IP>/ws_audio` | PCM16 microphone stream |
-
-The experimental bridge also supports `/ws_audio_v2`; select the endpoint that matches the firmware you actually flashed.
+The wearable only senses and streams; the panel on the nearby host starts the model backend and bridges the glasses to it.
 
 ## Three Tracks, One Project
 
 | Track | What lives here | Status |
 | --- | --- | --- |
-| **OpenGlass-Core** | ESP32-S3 sensing firmware, nearby-host ASR/VLM/TTS experiments, evaluation and latency tooling | Available |
-| **OpenGlass-Hardware** | [AI Smart Glasses Open-Source Report](hardware/AI_GLASSES_OPEN_SOURCE_REPORT_EN.md), 3D-printable frame, CAD/STL/3MF, BOM, wiring, assembly, printing and validation docs | Release package under verification |
-| **OpenGlass-OmniRuntime** | Standalone panel around external MiniCPM-o-Demo and llama.cpp-omni checkouts, ESP32 bridge, prompt switching, recording and replay | Experimental; local smoke test passed |
+| **OpenGlass-Core** | ESP32-S3 sensing firmware, nearby-host experiments, evaluation and latency tooling | Available |
+| **OpenGlass-Hardware** | 3D-printable frame, CAD/STL/3MF, BOM, wiring, assembly and validation docs | Release package under verification |
+| **OpenGlass-OmniRuntime** | Standalone panel around external MiniCPM-o-Demo and llama.cpp-omni checkouts, ESP32 + Rokid bridges, prompt switching, recording and replay | Experimental; verified working on the maintainer's setup |
 
-## Quick Start
+---
 
-Clone OpenGlass first:
+## Quick Start — Omni Control Panel
+
+This is the end-to-end path: build the model backend, bring up the upstream services, flash the glasses, then drive everything from the panel.
+
+> The panel is a thin launcher. It starts and supervises three processes (`worker` → `gateway` → `esp32_bridge`) and shows the glasses' first-person view. **It does not clone, build, or configure the upstream model projects for you** — you set those up once, following the steps below.
+
+### Step 1 — Build llama.cpp-omni (the model backend)
+
+Clone and build [llama.cpp-omni](https://github.com/tc-mb/llama.cpp-omni) (`master` branch). On Windows, the *x64 Native Tools Command Prompt for VS 2022* is recommended; CURL is not required.
 
 ```bash
-git clone https://github.com/OpenSQZ/OpenGlass.git
+git clone https://github.com/tc-mb/llama.cpp-omni
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DLLAMA_CURL=OFF
+cmake --build build --config Release --target llama-omni-server -j
+```
+
+A successful build produces `build/bin/Release/llama-omni-server.exe`.
+
+Prepare the MiniCPM-o model weights (download from Hugging Face) in this directory layout:
+
+```text
+<model_root>/
+├── MiniCPM-o-4_5-Q4_K_M.gguf
+├── vision/MiniCPM-o-4_5-vision-F16.gguf
+├── audio/MiniCPM-o-4_5-audio-F16.gguf
+├── tts/MiniCPM-o-4_5-tts-F16.gguf
+├── tts/MiniCPM-o-4_5-projector-F16.gguf
+└── token2wav-gguf/
+```
+
+You can sanity-check the backend by launching it directly (the panel will do this for you later, indirectly, via the worker):
+
+```bash
+llama-omni-server.exe -m <path-to-gguf> -ngl 99 --host 127.0.0.1 --port 22500 --ctx-size 8192
+```
+
+### Step 2 — Set up MiniCPM-o-Demo (worker + gateway)
+
+Clone [MiniCPM-o-Demo](https://github.com/OpenBMB/MiniCPM-o-Demo) (`master` branch) and install its dependencies:
+
+```bash
+git clone https://github.com/OpenBMB/MiniCPM-o-Demo
+cd MiniCPM-o-Demo
+pip install -r requirements.txt
+```
+
+Verify the upstream services work on their own before involving the panel:
+
+```bash
+# 1) backend (from the llama.cpp-omni build)
+llama-omni-server.exe -m <path-to-gguf> -ngl 99 --host 127.0.0.1 --port 22500 --ctx-size 8192
+# 2) worker (waits until the backend /health is ready)
+python worker.py --host 0.0.0.0 --port 22400 --gpu-id 0 --backend-server-url http://127.0.0.1:22500
+# 3) gateway
+python gateway.py
+```
+
+> [!WARNING]
+> **Fix the 300 s auto-disconnect.** In the gateway code, video duplex mode ends after 300 s and drops the connection. Change:
+> ```python
+> max_duration_s = 300 if mode == "video" else 600
+> ```
+> to:
+> ```python
+> max_duration_s = None if mode == "video" else 600
+> ```
+
+Open `http://localhost:8006` and confirm you can talk to the model using the PC's own webcam and microphone. Once that works, the upstream `worker.py` + `gateway.py` path is confirmed — the panel relies on exactly this path.
+
+### Step 3 — Install OpenGlass (as its own directory)
+
+Clone this repository to its own location (it does **not** need to live inside MiniCPM-o-Demo), and install its dependencies into the **same** environment you will run the panel from:
+
+```bash
+git clone <this-repo> OpenGlass
 cd OpenGlass
+pip install -r requirements.txt
 ```
 
-Choose the path that matches what you want to test.
+Then open `runtime/openglass_omni/panel.py` and set the paths in `CONFIG` (all marked with `<PATH_TO>`):
 
-### 1. Smoke-test the evaluation pipeline
+- **`procs["llama"]`** — the `llama-omni-server.exe` path and the `-m` GGUF path (from Steps 1–2).
+- **`minicpm_demo_dir`** — the MiniCPM-o-Demo directory (where `worker.py` / `gateway.py` live). The panel starts worker and gateway *in that directory*, so it must point at your MiniCPM-o-Demo clone, e.g. `r"D:\MiniCPM-o-Demo"`.
 
-This path needs no glasses and makes no cloud request. The current `cloud_api.yaml` uses the repository's stub adapter to exercise manifests, metrics, and run output.
+Confirm the ESP32 glasses and the PC are on the **same Wi-Fi**, find the glasses' IP in the Arduino IDE Serial Monitor (e.g. `192.168.10.174`), and confirm you can view its stream in a browser.
 
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
-python -m pip install -r eval_benchmark/requirements.txt
-python -m eval_benchmark.src.run_eval --config eval_benchmark/configs/cloud_api.yaml
+Edit `runtime/openglass_omni/devices.json` — name each pair of glasses and give its IP and default rotation. Names are arbitrary; you pick from them in the panel after launch:
+
+```json
+{
+  "_comment": "One entry per pair of glasses. After flashing, read the IP from Serial Monitor and set esp32_host. 'rotate' is the clockwise camera rotation (0/90/180/270) for how that unit is physically mounted. Each laptop keeps its own copy. The gateway port is not configured here.",
+  "devices": [
+    { "name": "left",  "esp32_host": "192.168.10.174", "esp32_port": 80, "rotate": 270 },
+    { "name": "right", "esp32_host": "192.168.43.148", "esp32_port": 80, "rotate": 180 },
+    { "name": "spare", "esp32_host": "192.168.43.149", "esp32_port": 80, "rotate": 180 }
+  ]
+}
 ```
 
-For real local inference, start an OpenAI-compatible VLM server separately and review [`eval_benchmark/README.md`](eval_benchmark/README.md) before selecting a non-stub config.
+### Step 4 — Launch the panel
 
-### 2. Flash and test the ESP32 sensing firmware
-
-1. Open [`CameraWebServer_PDM_Audio.ino`](CameraWebServer_PDM_Audio/CameraWebServer_PDM_Audio.ino) in Arduino IDE and follow the [firmware setup guide](CameraWebServer_PDM_Audio/README.md).
-2. Select the XIAO ESP32-S3 board profile and the matching camera configuration.
-3. Replace `YOUR_WIFI_NAME` and `YOUR_WIFI_PASSWORD` locally. Never commit real credentials.
-4. Compile, flash, and open Serial Monitor.
-5. Read the DHCP address as `<ESP32_IP>` and test `/capture`, `:81/stream`, and `/ws_audio` on your local network. This address may change after a restart.
-
-The tracked PDM mapping is `IO42 = CLK` and `IO41 = DATA`. Confirm it against your physical revision before powering the wearable.
-
-### 3. Launch the experimental Omni control panel
-
-OpenGlass keeps upstream projects external. Clone them next to, not inside, this repository:
+From the OpenGlass directory:
 
 ```bash
-git clone --branch feat/web-demo https://github.com/tc-mb/llama.cpp-omni.git
-git clone --branch Comni https://github.com/OpenBMB/MiniCPM-o-Demo.git
-```
-
-Build llama.cpp-omni once using its upstream instructions, configure MiniCPM-o-Demo's ignored `config.json`, then create the OpenGlass local adapter config:
-
-```bash
-python -m pip install -r <MINICPM_O_DEMO_ROOT>/requirements.txt
-python -m pip install -r runtime/openglass_omni/requirements.txt
-cp runtime/openglass_omni/runtime.example.json runtime/openglass_omni/runtime.local.json
-cp examples/configs/devices.example.json runtime/openglass_omni/devices.local.json
-
-python glasses_panel.py --check
 python glasses_panel.py
 ```
 
-Edit `devices.local.json` and replace the example `esp32_host` with the `<ESP32_IP>` printed by Serial Monitor. Keep `devices_file` set to `devices.local.json` in `runtime.local.json`. On Windows PowerShell, replace `cp` with `Copy-Item`. The launcher reuses an existing llama.cpp-omni build; it does not clone, update, or compile upstream repositories for you. See the [full Omni setup](runtime/openglass_omni/README.md).
+The panel opens a control window. It defaults to the first device in `devices.json`; switch with the dropdown. Click **Start (一键启动)** to bring up `llama-omni-server → worker → gateway → demo` in order — the panel launches the backend, waits for its `/health` to return 200, then starts the worker and gateway (in `minicpm_demo_dir`) and the ESP32 bridge. When all indicators are green, the right side shows the glasses' first-person view and you can talk to the model through the glasses.
 
-### Panel lifecycle
+If the view stays blank, check the network — the PC and the ESP32 must be on the same Wi-Fi.
+
+## Panel Lifecycle
 
 | Control | Behavior |
 | --- | --- |
-| **Start** | Starts upstream worker, upstream gateway, then the OpenGlass ESP32 bridge |
-| **Restart / Stop** | Restarts or stops only the OpenGlass bridge; the model stays warm |
-| **Restart All / Stop All** | Operates on all three managed processes; stopping the worker also stops its llama-server child process |
-| **Apply Prompt** | Restarts only the OpenGlass bridge with the selected prompt |
+| **Start (一键启动)** | Starts `llama-omni-server` → `worker` → `gateway` → `demo` in order, waiting for each to be ready (backend `/health`, then worker/gateway ports) |
+| **Stop (停止)** | Stops only the demo (the current session); the backend, worker, and gateway stay warm |
+| **Start again** | After **Stop**, brings the demo back up (fast — backend/worker/gateway still running) |
+| **Stop All (全部停止)** | Stops demo, then gateway, then worker, then the llama-omni-server backend |
+| **Chain dropdown** | Switches between the **ESP32** and **Rokid** links (front three stages shared; only the fourth process differs) |
+| **Prompt** | Pick a preset or edit the prompt, then Start; the selected prompt is passed to the demo |
+
+## Configuration
+
+Everything you need to configure lives in a few places. Model paths and backend settings belong to the **upstream** projects, not here.
+
+| What | Where | Notes |
+| --- | --- | --- |
+| **Backend & model paths** | `procs["llama"]` in `runtime/openglass_omni/panel.py` `CONFIG` | **Must edit.** Set the `llama-omni-server.exe` path (llama.cpp-omni build output) and the `-m` GGUF path (MiniCPM-o main weights; vision/audio/tts submodels go in sibling dirs — see the model layout above). |
+| **Glasses IP / rotation** | `runtime/openglass_omni/devices.json` | One entry per pair; the panel dropdown follows this file. Add a device by editing the JSON — no code change. |
+| **Conda environment** | `conda_env` in `panel.py` `CONFIG` | Set to your **named** virtual environment. **Do not use `base`** (see warning below). Leave `None` only if you run the panel from an already-activated environment. |
+| **MiniCPM-o-Demo directory** | `minicpm_demo_dir` in `panel.py` `CONFIG` | **Must edit.** Absolute path to your MiniCPM-o-Demo clone (where `worker.py`/`gateway.py` live). The panel starts worker and gateway in this directory. |
+| **Worker ready port** | `worker_ready_port` in `panel.py` `CONFIG` | Must equal the port your `worker.py` listens on (default `22400`). If it mismatches, the panel still starts via a stable-alive fallback, but matching it is faster and cleaner. |
+| **Working directory** | `cwd` in `panel.py` `CONFIG` | Optional. Only affects llama/demo/rokid, which already use absolute paths — normally leave empty. |
+
+> [!WARNING]
+> **Use a named conda environment, not `base`.** The panel starts the demo with `conda run -n <env> python esp32_bridge.py --prompt "..."`. When `<env>` is `base`, `conda run` can truncate multi-line arguments, so a multi-line system prompt is silently dropped and the model falls back to a generic default ("a friendly assistant"). A named environment (`conda create -n openglass ...`) avoids this. If `conda_env` is `None`, the panel uses the current interpreter directly and is unaffected.
+
+## Session Recording and Replay
+
+Every session is recorded locally by `recorder_live.py` (video, audio tracks, subtitles, and metadata under `sessions/`). The bridge's web UI (`bridge_ui.py`, default `http://localhost:8080`) serves both the live first-person view shown inside the panel and a replay browser at `/replay`.
+
+`rerun_source.py` is a separate command-line tool that replays a recorded session back through the model — useful for repeatable testing without the glasses. It is not wired into the panel:
+
+```bash
+python runtime/openglass_omni/esp32_bridge.py \
+  --rerun-from sessions/<session-id> \
+  --gateway localhost:8040 \
+  --prompt "your prompt"
+```
 
 ## Hardware Build Path
 
-The hardware track is being prepared as a versioned, reproducible release rather than a folder of unexplained print files.
+The hardware track is being prepared as a versioned, reproducible release. Start with the [hardware overview](hardware/README.md), then follow the [CAD and 3D-printing guide](hardware/cad_3d_print/README.md), [BOM guide](hardware/bom/README.md), and [safety boundary](docs/safety_privacy.md). Do not build or wear an unverified battery-powered prototype solely from draft notes.
 
-```text
-CAD source → reviewed STL exports → 3MF plate → sanitized BOM
-          → wiring + pin map → assembly → firmware test → end-to-end validation
-```
+### Flashing the ESP32 firmware
 
-| Artifact | Public status |
-| --- | --- |
-| Editable STEP / 3MF source | Available in internal source materials; publication review pending |
-| STL exports | Not yet published |
-| BOM spreadsheet | Exists in source materials; component and link sanitization pending |
-| Wiring / assembly guide | In preparation |
-| Photos and videos | Candidate materials exist; privacy and rights review pending |
-| Battery, charging, thermal and comfort results | Require human verification |
-
-Start with the [hardware overview](hardware/README.md), then follow the evolving [CAD and 3D-printing guide](hardware/cad_3d_print/README.md), [BOM guide](hardware/bom/README.md), and [safety boundary](docs/safety_privacy.md). Do not build or wear an unverified battery-powered prototype solely from draft notes.
+1. Install [Arduino IDE 2.x](https://www.arduino.cc/en/software).
+2. In *File → Preferences → Additional boards manager URLs*, add:
+   `https://espressif.github.io/arduino-esp32/package_esp32_index.json`
+3. In *Tools → Board → Boards Manager*, search `esp32` and install *esp32 by Espressif Systems* (this takes a while).
+4. Open `CameraWebServer_PDM_Audio.ino`, connect the glasses over USB, and select the new serial port (e.g. `COM3`). Under *Tools → PSRAM*, choose **OPI PSRAM**.
+5. Set `ssid` and `password` to the same Wi-Fi the PC uses:
+   ```cpp
+   const char *ssid = "YOUR_WIFI_NAME";
+   const char *password = "YOUR_WIFI_PASSWORD";
+   ```
+   Never commit real credentials.
+6. Click **Upload**. After flashing, open Serial Monitor at baud `115200` to see the network status and the glasses' IP.
 
 ## Repository Map
 
 ```text
 OpenGlass/
+├── glasses_panel.py             # Entry shim → runtime.openglass_omni.panel:main
+├── runtime/openglass_omni/      # Standalone Omni control panel + ESP32/Rokid bridges
+│   ├── panel.py / panel.html    # Control panel logic and its UI
+│   ├── esp32_bridge.py          # ESP32 duplex bridge (host-side demo)
+│   ├── rokid_minicpm_v8.py      # Rokid link
+│   ├── bridge_ui.py             # Live view + replay web server
+│   ├── recorder_live.py         # Local session recording
+│   ├── rerun_source.py          # Replay a recorded session through the model
+│   ├── devices.json             # Glasses IP / rotation
+│   └── templates/               # live.html, replay.html, replay_index.html
 ├── CameraWebServer_PDM_Audio/   # ESP32-S3 camera + PDM microphone firmware
-├── eval_benchmark/              # Evaluation, latency, baselines, Omni harnesses
-├── runtime/openglass_omni/      # Standalone experimental Omni adapter and UI
+├── eval_benchmark/              # Evaluation, latency, baselines
 ├── hardware/                    # CAD/BOM/assembly release documentation
 ├── docs/                        # Architecture, quickstart, safety, roadmap
 ├── papers/                      # Publication pages and citation status
-├── examples/configs/            # Sanitized local configuration examples
-└── assets/                      # Candidate public figures and prototype media
+└── assets/                      # Prototype photos and figures used in the docs
 ```
-
-## Documentation
-
-| I want to... | Start here |
-| --- | --- |
-| Understand the design | [Project overview](docs/overview.md) · [Architecture](docs/architecture.md) |
-| Run the software | [Quickstart](docs/quickstart.md) · [Omni Runtime](runtime/openglass_omni/README.md) |
-| Build the wearable | [AI Smart Glasses Open-Source Report](hardware/AI_GLASSES_OPEN_SOURCE_REPORT_EN.md) · [CAD/printing](hardware/cad_3d_print/README.md) · [BOM](hardware/bom/README.md) |
-| Run evaluations | [Evaluation README](eval_benchmark/README.md) · [Rubric](eval_benchmark/rubric_nlp_v3.md) |
-| Prepare a release | [Roadmap](docs/roadmap.md) · [Release checklist](docs/release_checklist.md) |
-| Plan a user study | [Safety and privacy](docs/safety_privacy.md) |
 
 ## Current Boundaries
 
 - Model inference runs on a nearby host, never on the ESP32 glasses.
 - The Omni runtime is experimental and is not a production-ready skill platform.
-- One-click session rerun UI, skill import/restart, and long-session reliability remain open work.
-- Rokid source/APK is not included in the current public package.
+- The panel starts and supervises processes and shows the first-person view; it does **not** own model weights, backend paths, or upstream configuration.
+- `worker.py` / `gateway.py` and the model weights come from external upstream projects and are not vendored here.
+- The Rokid link is included, but its gateway protocol may differ from the ESP32 link depending on your build; treat the ESP32 link as the primary supported path.
 - Hardware naming, BOM, battery, charging, autofocus, comfort, and print settings still require verification.
-- Model weights, private recordings, credentials, real device addresses, and upstream repositories are not vendored here.
-
-## Safety and Privacy
-
-OpenGlass is a research prototype. It can be wrong, late, incomplete, or unavailable. Do not rely on it for street crossing, vehicle avoidance, medical decisions, hazardous environments, or other safety-critical tasks.
-
-First-person cameras and microphones can capture bystanders, screens, documents, homes, workplaces, and location clues. Local inference reduces default exposure but is not a privacy guarantee. Review and minimize saved frames, audio, transcripts, and logs. Read the full [safety and privacy guide](docs/safety_privacy.md) before user-facing tests.
-
-## Contributing
-
-Contributions are especially useful in these areas:
-
-- Clean-machine setup validation on Windows, Linux, and different GPUs.
-- ESP32 `/ws_audio` and runtime `/ws_audio_v2` protocol reconciliation.
-- Session rerun UI and privacy-preserving replay tools.
-- Skill restart/import interfaces with honest experimental labeling.
-- Sanitized CAD, STL, 3MF, BOM, wiring, assembly, and validation artifacts.
-- Accessibility feedback and controlled studies with blind and low-vision users.
-
-Please do not submit model weights, private recordings, credentials, personal data, raw private logs, or unpublished submission materials.
-
-## Publication
-
-**OpenGlass: A Sensing-Computing Split Architecture for Local MLLM-Driven Real-Time Visual Assistance**<br>
-Mengzhang Li and Yuan Yao · ACL 2026 System Demonstrations
-
-Official paper metadata and final BibTeX are still awaiting public verification. See [`papers/acl2026.md`](papers/acl2026.md); do not invent an Anthology URL, DOI, pages, or numerical results.
 
 ## Upstream Projects
 
-OpenGlass integrates with, rather than vendors, upstream projects including [MiniCPM-o](https://github.com/OpenBMB/MiniCPM-o), [MiniCPM-o-Demo](https://github.com/OpenBMB/MiniCPM-o-Demo), [llama.cpp-omni](https://github.com/tc-mb/llama.cpp-omni), and the broader [llama.cpp](https://github.com/ggml-org/llama.cpp) ecosystem.
+- [llama.cpp-omni](https://github.com/tc-mb/llama.cpp-omni) — the C++ model backend (`llama-omni-server`).
+- [MiniCPM-o-Demo](https://github.com/OpenBMB/MiniCPM-o-Demo) — provides `worker.py` and `gateway.py`, plus the model/backend configuration.
+
+Clone these as their **own independent directories** — OpenGlass does not need to live inside MiniCPM-o-Demo, and nothing is copied between them. Build llama.cpp-omni once, configure MiniCPM-o-Demo per its own documentation, then point OpenGlass at both via `procs["llama"]` and `minicpm_demo_dir` in `panel.py`. OpenGlass reuses an existing setup and does not compile or configure upstream for you.
 
 ## License
 
-This branch does not yet contain a repository license. Until the project owner publishes one, do not assume permission to redistribute or reuse the code or assets.
-
-<div align="center">
-
-**Wearable sensing. Nearby-device local inference. Open research.**
-
-</div>
+See [LICENSE](LICENSE).

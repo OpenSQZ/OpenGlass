@@ -97,6 +97,13 @@ ESP32_PKT_BODY   = 640
 LOGGER = logging.getLogger("duplex_v6_6")
 
 # —— v6.6 移植：录制 / Web 观测 / rerun 输入源（取代旧的 render_model_view_video）——
+# 本文件由 panel 以独立子进程启动，工作目录可能不是本文件所在目录（cwd 常指向
+# MiniCPM-o-Demo，供 worker/gateway 定位）。把本文件目录加入 sys.path，使下面对同
+# 目录模块(recorder_live/bridge_ui/rerun_source)的导入不依赖 cwd。
+import os as _os, sys as _sys
+_HERE = _os.path.dirname(_os.path.abspath(__file__))
+if _HERE not in _sys.path:
+    _sys.path.insert(0, _HERE)
 from recorder_live import LiveRecorder
 from bridge_ui import WebUIServer
 try:
@@ -802,9 +809,8 @@ async def esp32_audio_reader(
     host: str, port: int, ring: TimestampedRingBuffer,
     stop_evt: asyncio.Event, stats: dict,
     live_rec=None,
-    audio_endpoint: str = "/ws_audio_v2",
 ) -> None:
-    url = f"ws://{host}:{port}{audio_endpoint}"
+    url = f"ws://{host}:{port}/ws_audio_v2"
     LOGGER.info("[ESP32] audio WS: %s", url)
     backoff = 1.0
     recv_count = 0
@@ -2000,6 +2006,15 @@ async def run_bridge(args) -> None:
     if prompt_suffix:
         effective_prompt = args.prompt.rstrip() + "\n\n" + prompt_suffix
 
+    # 把实际生效的 system_prompt 打到日志（前 80 字 + 总长），便于排查"prompt 没进入"：
+    # - 看到期望的开头 = prompt 正确进入
+    # - 看到字面量 "{prompt}" = panel 占位符没被替换
+    # - 看到默认/通用开头 = 选中的 prompt 没传进来（常见于 conda run -n base 截断多行参数，
+    #   见 README 的 conda 说明——请用命名虚拟环境，不要用 base）
+    _pp = (effective_prompt or "").replace("\n", " ")
+    LOGGER.info("[PROMPT] len=%d head=%s", len(effective_prompt or ""),
+                _pp[:80] + ("…" if len(_pp) > 80 else ""))
+
     recorder = SessionRecorder(
         root_dir=Path(args.save_session),
         enabled=not args.no_save,
@@ -2114,22 +2129,16 @@ async def run_bridge(args) -> None:
         return
     else:
         audio_reader_task = asyncio.create_task(
-            esp32_audio_reader(
-                args.esp32_host,
-                args.esp32_port,
-                ring,
-                stop_evt,
-                esp_stats,
-                live_rec,
-                args.audio_endpoint,
-            )
+            esp32_audio_reader(args.esp32_host, args.esp32_port,
+                               ring, stop_evt, esp_stats, live_rec)
         )
 
     last_runtime_skill_event_id = 0
 
     session_id = f"omni_esp32v6_{int(time.time())}"
     scheme = "wss" if args.gateway_tls else "ws"
-    gw_url = f"{scheme}://{args.gateway}/ws/duplex/{session_id}"
+    # 新架构：统一入口 /v1/realtime；mode=video(音频+视频帧)。session_id 由 gateway 下发。
+    gw_url = f"{scheme}://{args.gateway}/v1/realtime?mode=video"
     LOGGER.info("[GW] connecting: %s", gw_url)
     LOGGER.info(
         "[CFG] echo=%s tail=%dms noise=%.1fdB save=%s img=%s rotate=%d° "
@@ -2187,20 +2196,84 @@ async def run_bridge(args) -> None:
             ) as gw:
                 LOGGER.info("[GW] connected (session=%s)", session_id)
 
-                await gw.send_json({
-                    "type": "prepare",
+                # ── 新架构握手：queue → session.init(payload) → session.created ──
+                # 参考 realtime-session.js：连上后处理排队消息；收到 queue_done 或
+                # 100ms 兜底后发 session.init（system_prompt 等放进 payload）；
+                # 收到 session.created 视为就绪。gateway 排队期间会缓冲我们发的
+                # session.init，worker 分配后再转发，故提前发送安全。
+                init_payload = {
                     "system_prompt": effective_prompt,
                     "config": {
                         "force_listen_count": args.force_listen,
                         "chunk_ms": CHUNK_MS,
                         "generate_audio": True,
-                        "max_new_speak_tokens_per_chunk": 20,
+                        "max_new_speak_tokens_per_chunk": 5,
                     },
                     "max_slice_nums": 1,
                     "deferred_finalize": True,
-                })
-                LOGGER.info("[GW] prepare sent; waiting for audio...")
+                }
+                _init_sent = False
 
+                async def _send_session_init() -> None:
+                    nonlocal _init_sent
+                    if _init_sent:
+                        return
+                    _init_sent = True
+                    await gw.send_json({"type": "session.init", "payload": init_payload})
+                    LOGGER.info("[GW] session.init sent")
+
+                _session_ready = False
+                _hs_start = time.monotonic()
+                while not _session_ready and not stop_evt.is_set():
+                    if not _init_sent:
+                        _remaining = 0.1 - (time.monotonic() - _hs_start)
+                        _recv_timeout = max(0.02, _remaining) if _remaining > 0 else 0.02
+                    else:
+                        _recv_timeout = 1.0  # 已发 init：短超时轮询，便于响应 Ctrl+C/急停
+                    try:
+                        _wsmsg = await asyncio.wait_for(gw.receive(), timeout=_recv_timeout)
+                    except asyncio.TimeoutError:
+                        # 100ms 兜底：无排队时也主动发 init（与前端 setTimeout(100) 一致）
+                        if not _init_sent and (time.monotonic() - _hs_start) >= 0.1:
+                            await _send_session_init()
+                        continue
+                    if _wsmsg.type == aiohttp.WSMsgType.TEXT:
+                        try:
+                            _m = json.loads(_wsmsg.data)
+                        except Exception:
+                            continue
+                        _mt = _m.get("type", "")
+                        if _mt in ("session.queued", "queued",
+                                   "session.queue_update", "queue_update"):
+                            LOGGER.info(
+                                "[GW] queued position=%s eta=%ss qlen=%s",
+                                _m.get("position"), _m.get("estimated_wait_s"),
+                                _m.get("queue_length"),
+                            )
+                        elif _mt in ("session.queue_done", "queue_done"):
+                            LOGGER.info("[GW] worker assigned")
+                            await _send_session_init()
+                        elif _mt == "session.created":
+                            session_id = _m.get("session_id") or session_id
+                            LOGGER.info(
+                                "[GW] session.created id=%s prompt_len=%s",
+                                session_id, _m.get("prompt_length"),
+                            )
+                            _session_ready = True
+                        elif _mt == "error":
+                            LOGGER.error("[GW] handshake error: %s", _m.get("error"))
+                            stop_evt.set()
+                            return
+                    elif _wsmsg.type in (aiohttp.WSMsgType.CLOSED,
+                                         aiohttp.WSMsgType.ERROR):
+                        LOGGER.error("[GW] closed during handshake")
+                        stop_evt.set()
+                        return
+
+                if not _session_ready:
+                    LOGGER.info("[GW] 握手期间收到停止请求，退出")
+                    return
+                LOGGER.info("[GW] session ready; waiting for ESP32 audio...")
                 # ── 等待 ESP32 音频首包（现场连接韧性）──
                 #   后台 esp32_audio_reader 已带 backoff 自动重连；这里负责"耐心等"：
                 #   等待时长 = --connect-wait-s（默认 120s，旧版写死 15s）；
@@ -2235,13 +2308,13 @@ async def run_bridge(args) -> None:
                                 _wait_deadline_s,
                             )
                             stop_evt.set()
-                            await gw.send_json({"type": "stop"})
+                            await gw.send_json({"type": "session.close", "reason": "no_audio"})
                             return
                     await asyncio.sleep(0.05)
                 if ring.latest_ts_ms == 0:
                     # 走到这里通常是 stop_evt 被外部置位（面板急停/Ctrl-C）
                     LOGGER.info("[ESP32] 等待音频期间收到停止请求，退出")
-                    await gw.send_json({"type": "stop"})
+                    await gw.send_json({"type": "session.close", "reason": "user_stop"})
                     return
                 LOGGER.info("[ESP32] 音频首包到达，进入正常双工循环")
 
@@ -2276,12 +2349,114 @@ async def run_bridge(args) -> None:
                     return max(0, int((time.time() - session_start_wall) * 1000))
 
                 # ----- recv loop -----
-                # V1 后端每条 result 都 eot=True，无法用来切 turn。改用"AI 说话中收到
-                # listen"判定真正的轮次结束（与 V2 一致），让字幕成整句 + streaming 光标。
-                _spk_v1 = {"speaking": False}
+                # ── turn 边界（关键）──
+                # V1 后端会发 end_of_turn=True 标记"AI 这轮说完了"；V2 后端实测恒发
+                # false，于是 TurnPrinter / live.html 的 `if (endOfTurn)` 永不触发，
+                # 所有文本累积进同一个气泡 → 显示成"1 轮"、聚成一坨。
+                # V2 里真正的"说完"信号是 response.listen（模型回到听的状态）——gateway
+                # 前端 realtime-session.js 的 _handleListen 正是靠它 onSpeakEnd。
+                # 这里补上 V1 语义：AI 说话中收到 listen → end_of_turn=True。
+                # 连续 listen（模型持续在听）不重复结束 turn。live.html 无需改动。
+                _spk = {"speaking": False}
 
                 async def recv_loop() -> None:
                     nonlocal turn_start_session_ms
+
+                    async def handle_result(
+                        is_listen: bool,
+                        end_of_turn: bool,
+                        text: str,
+                        audio_b64: Optional[str],
+                        kv_cache_length: Optional[int],
+                    ) -> None:
+                        """把新协议各类事件归一成旧的 result 语义后统一处理。"""
+                        nonlocal turn_start_session_ms
+                        # KV prune 检测
+                        if kv_cache_length is not None:
+                            kv_evt = kv_tracker.update({"kv_cache_length": kv_cache_length})
+                            if (kv_evt is not None and ui_server is not None
+                                    and ui_server.live_clients):
+                                asyncio.create_task(ui_server.emit(kv_evt))
+                        echo_gate.update(is_listen, end_of_turn)
+                        if asr_mirror is not None and not is_listen:
+                            asr_mirror.note_model_text(text)
+                            asr_mirror.suppress_for(
+                                args.funasr_echo_suppress_s, "model result"
+                            )
+
+                        ai_pcm: Optional[np.ndarray] = None
+                        if audio_b64:
+                            try:
+                                ai_bytes = base64.b64decode(audio_b64)
+                                ai_pcm = np.frombuffer(ai_bytes, dtype=np.float32)
+                                if speaker is not None and ai_pcm.size > 0:
+                                    speaker.enqueue(ai_pcm)
+                            except Exception as e:
+                                LOGGER.warning("decode AI audio: %s", e)
+                                ai_pcm = None
+
+                        if ai_pcm is not None and ai_pcm.size > 0:
+                            recorder.log_ai_audio_timing(
+                                _now_session_ms(), int(ai_pcm.size)
+                            )
+
+                        audio_ms_in = (
+                            int(ai_pcm.size * 1000 / SAMPLE_RATE_OUT)
+                            if ai_pcm is not None else 0
+                        )
+                        LOGGER.info(
+                            "[RX] listen=%s eot=%s audio=%dms kv=%s text=%r",
+                            is_listen, end_of_turn, audio_ms_in,
+                            kv_tracker.last_kv_len,
+                            text[:60] + ("..." if len(text) > 60 else ""),
+                        )
+
+                        prev_turn_idx = turn_printer.turn_idx
+                        turn_idx_cur, full_text, turn_listen = turn_printer.feed(
+                            is_listen, end_of_turn, text
+                        )
+                        if text and turn_printer.turn_idx > prev_turn_idx:
+                            turn_start_session_ms = _now_session_ms()
+
+                        # 有文本 → 推增量字幕；end_of_turn → 推轮次结束信号。
+                        # listen 事件没有 text，但它携带 end_of_turn=True（V2 的
+                        # 说完信号），必须推给 live.html，否则前端 `if (endOfTurn)`
+                        # 永不触发、所有文本会累积进同一个气泡（聚成一坨）。
+                        if ui_server is not None and (text or end_of_turn):
+                            asyncio.create_task(ui_server.emit({
+                                "type": "result",
+                                "is_listen": is_listen,
+                                "end_of_turn": end_of_turn,
+                                "text": text,
+                            }))
+
+                        if end_of_turn and full_text:
+                            recorder.log_turn_text(turn_idx_cur, full_text, turn_listen)
+                            end_ms = _now_session_ms() + 800  # 多挂 0.8s
+                            start_ms = (turn_start_session_ms
+                                        if turn_start_session_ms is not None
+                                        else max(end_ms - 3000, 0))
+                            recorder.log_subtitle(
+                                start_ms=start_ms,
+                                end_ms=end_ms,
+                                text=full_text,
+                                is_listen=turn_listen,
+                                turn_idx=turn_idx_cur,
+                            )
+                            turn_start_session_ms = None
+
+                        pending_ms = -1
+                        if speaker is not None:
+                            pending_ms = speaker.stats()["pending_ms"]
+                        recorder.log_result(
+                            is_listen=is_listen,
+                            end_of_turn=end_of_turn,
+                            text=text,
+                            ai_audio_f32=ai_pcm,
+                            turn_idx=turn_printer.turn_idx,
+                            player_pending_ms=pending_ms,
+                        )
+
                     async for msg in gw:
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             try:
@@ -2289,154 +2464,96 @@ async def run_bridge(args) -> None:
                             except Exception:
                                 continue
                             mtype = result.get("type", "")
-                            if mtype == "result":
-                                is_listen = bool(result.get("is_listen", True))
-                                text = result.get("text", "") or ""
-                                # ── turn 边界修正（关键）──
-                                # V1 后端每条 result 都发 eot=True（每个 text 片段都标"说完"），
-                                # 直接用会导致每个片段各成一个气泡：token token 冒、无 streaming
-                                # 光标。真正的 turn 边界是"AI 说话中(listen=False)→收到 listen"
-                                # 的翻转点。这里忽略后端 eot，用 listen 翻转自己判定，让一整轮的
-                                # 多个片段累积成一个 streaming 气泡，说完(listen)才定型。
-                                # 与 V2 的处理逻辑一致。
-                                _backend_eot = bool(result.get("end_of_turn", False))
-                                if is_listen:
-                                    # 收到 listen：若刚才在说话，则这一轮结束
-                                    end_of_turn = _spk_v1["speaking"]
-                                    _spk_v1["speaking"] = False
+
+                            # ── 新协议 ──
+                            if mtype == "response.output_audio.delta":
+                                _spk["speaking"] = True
+                                await handle_result(
+                                    is_listen=False,
+                                    end_of_turn=bool(result.get("end_of_turn", False)),
+                                    text=result.get("text", "") or "",
+                                    audio_b64=result.get("audio"),
+                                    kv_cache_length=result.get("kv_cache_length"),
+                                )
+                            elif mtype == "response.output.delta":
+                                kind = result.get("kind", "")
+                                LOGGER.info("[RX-DBG] output.delta kind=%s keys=%s has_audio=%s",
+                                            kind, list(result.keys()), bool(result.get("audio")))
+                                eot = bool(result.get("end_of_turn", False))
+                                kv = result.get("kv_cache_length")
+                                if kind == "listen":
+                                    # AI 说话中收到 listen = 这一轮说完
+                                    _eot = _spk["speaking"] or eot
+                                    _spk["speaking"] = False
+                                    await handle_result(True, _eot, "", None, kv)
+                                elif kind == "text":
+                                    _spk["speaking"] = True
+                                    await handle_result(
+                                        False, eot, result.get("text", "") or "", None, kv
+                                    )
+                                elif kind == "audio":
+                                    _spk["speaking"] = True
+                                    await handle_result(
+                                        False, eot, "", result.get("audio"), kv
+                                    )
                                 else:
-                                    # AI 正在说话：累积，不结束（忽略后端每条的 eot=True）
-                                    end_of_turn = False
-                                    if text:
-                                        _spk_v1["speaking"] = True
-                                kv_evt = kv_tracker.update(result)  # KV prune 检测 -> logs
-                                if kv_evt is not None and ui_server is not None and ui_server.live_clients:
-                                    asyncio.create_task(ui_server.emit(kv_evt))
-                                echo_gate.update(is_listen, end_of_turn)
-                                if asr_mirror is not None and not is_listen:
-                                    asr_mirror.note_model_text(text)
-                                    asr_mirror.suppress_for(
-                                        args.funasr_echo_suppress_s,
-                                        "model result",
-                                    )
-
-                                ai_pcm: Optional[np.ndarray] = None
-                                audio_b64 = result.get("audio_data")
-                                if audio_b64:
-                                    try:
-                                        ai_bytes = base64.b64decode(audio_b64)
-                                        ai_pcm = np.frombuffer(ai_bytes, dtype=np.float32)
-                                        if speaker is not None and ai_pcm.size > 0:
-                                            speaker.enqueue(ai_pcm)
-                                    except Exception as e:
-                                        LOGGER.warning("decode AI audio: %s", e)
-                                        ai_pcm = None
-
-                                # v6：记录 AI 音频的会话时间戳
-                                if ai_pcm is not None and ai_pcm.size > 0:
-                                    recorder.log_ai_audio_timing(
-                                        _now_session_ms(), int(ai_pcm.size)
-                                    )
-
-                                # v6：对每条 result 打一行精简的接收可见性（诊断用）
-                                audio_ms_in = (
-                                    int(ai_pcm.size * 1000 / SAMPLE_RATE_OUT)
-                                    if ai_pcm is not None else 0
+                                    LOGGER.debug("[RX] unknown output.delta kind=%s", kind)
+                            elif mtype == "response.listen":
+                                # AI 说话中收到 listen = 这一轮说完；持续 listen 不重复结束
+                                _eot = _spk["speaking"] or bool(
+                                    result.get("end_of_turn", False)
                                 )
-                                LOGGER.info(
-                                    "[RX] result listen=%s eot=%s audio=%dms kv=%s text=%r",
-                                    is_listen, end_of_turn, audio_ms_in,
-                                    kv_tracker.last_kv_len,
-                                    text[:60] + ("..." if len(text) > 60 else ""),
+                                _spk["speaking"] = False
+                                await handle_result(
+                                    True,
+                                    _eot,
+                                    "", None,
+                                    result.get("kv_cache_length"),
                                 )
-
-                                # v6：捕捉新 turn 的起点
-                                prev_turn_idx = turn_printer.turn_idx
-                                turn_idx_cur, full_text, turn_listen = turn_printer.feed(
-                                    is_listen, end_of_turn, text
-                                )
-                                if (text and turn_printer.turn_idx > prev_turn_idx):
-                                    turn_start_session_ms = _now_session_ms()
-
-                                # v6.6 移植：把字幕/文本推给 bridge_ui live 前端。
-                                # 有 text 推增量；end_of_turn 推轮次结束(让 streaming 气泡定型、
-                                # 光标消失)。listen 结束帧无 text 但需推，否则气泡永远 streaming。
-                                if ui_server is not None and (text or end_of_turn):
-                                    asyncio.create_task(ui_server.emit({
-                                        "type": "result",
-                                        "is_listen": is_listen,
-                                        "end_of_turn": end_of_turn,
-                                        "text": text,
-                                    }))
-
-                                if end_of_turn and full_text:
-                                    recorder.log_turn_text(
-                                        turn_idx_cur, full_text, turn_listen
-                                    )
-                                    end_ms = _now_session_ms() + 800  # 多挂 0.8s
-                                    start_ms = (turn_start_session_ms
-                                                if turn_start_session_ms is not None
-                                                else max(end_ms - 3000, 0))
-                                    recorder.log_subtitle(
-                                        start_ms=start_ms,
-                                        end_ms=end_ms,
-                                        text=full_text,
-                                        is_listen=turn_listen,
-                                        turn_idx=turn_idx_cur,
-                                    )
-                                    turn_start_session_ms = None
-
-                                pending_ms = -1
-                                if speaker is not None:
-                                    pending_ms = speaker.stats()["pending_ms"]
-                                recorder.log_result(
-                                    is_listen=is_listen,
-                                    end_of_turn=end_of_turn,
-                                    text=text,
-                                    ai_audio_f32=ai_pcm,
-                                    turn_idx=turn_printer.turn_idx,
-                                    player_pending_ms=pending_ms,
-                                )
-
-                            elif mtype == "audio_only":
-                                audio_b64 = result.get("audio_data")
-                                if asr_mirror is not None:
-                                    asr_mirror.suppress_for(
-                                        args.funasr_echo_suppress_s,
-                                        "model audio_only",
-                                    )
-                                if audio_b64 and speaker is not None:
-                                    try:
-                                        ai_bytes = base64.b64decode(audio_b64)
-                                        ai_pcm = np.frombuffer(ai_bytes, dtype=np.float32)
-                                        if ai_pcm.size > 0:
-                                            speaker.enqueue(ai_pcm)
-                                            recorder.log_ai_audio_timing(
-                                                _now_session_ms(), int(ai_pcm.size)
-                                            )
-                                            LOGGER.info(
-                                                "[RX] audio_only audio=%dms",
-                                                int(ai_pcm.size * 1000 / SAMPLE_RATE_OUT),
-                                            )
-                                            pending_ms = speaker.stats()["pending_ms"]
-                                            recorder.log_result(
-                                                is_listen=False,
-                                                end_of_turn=False,
-                                                text="",
-                                                ai_audio_f32=ai_pcm,
-                                                turn_idx=turn_printer.turn_idx,
-                                                player_pending_ms=pending_ms,
-                                            )
-                                    except Exception as e:
-                                        LOGGER.warning("decode audio_only: %s", e)
+                            elif mtype == "response.metrics":
+                                kv = result.get("kv_cache_length")
+                                if kv is not None:
+                                    kv_evt = kv_tracker.update({"kv_cache_length": kv})
+                                    if (kv_evt is not None and ui_server is not None
+                                            and ui_server.live_clients):
+                                        asyncio.create_task(ui_server.emit(kv_evt))
                             elif mtype == "runtime_prompt_ack":
                                 LOGGER.info(
                                     "[SKILL] runtime prompt ack event=%s intent=%s",
                                     result.get("event_id"),
                                     result.get("intent") or "-",
                                 )
+                            elif mtype == "session.closed":
+                                LOGGER.warning(
+                                    "[GW] session closed: %s", result.get("reason")
+                                )
+                                stop_evt.set()
+                                return
                             elif mtype == "error":
                                 LOGGER.error("[GW] error: %s", result.get("error"))
+                            elif mtype in (
+                                "session.queued", "session.queue_update",
+                                "session.queue_done", "session.created",
+                            ):
+                                pass  # 迟到/重复的握手消息，忽略
+
+                            # ── 向后兼容：旧协议 ──
+                            elif mtype == "result":
+                                await handle_result(
+                                    bool(result.get("is_listen", True)),
+                                    bool(result.get("end_of_turn", False)),
+                                    result.get("text", "") or "",
+                                    result.get("audio_data"),
+                                    result.get("kv_cache_length"),
+                                )
+                            elif mtype == "audio_only":
+                                if asr_mirror is not None:
+                                    asr_mirror.suppress_for(
+                                        args.funasr_echo_suppress_s, "model audio_only"
+                                    )
+                                await handle_result(
+                                    False, False, "", result.get("audio_data"), None
+                                )
                             elif mtype == "timeout":
                                 LOGGER.warning("[GW] timeout: %s", result.get("reason"))
                                 stop_evt.set()
@@ -2618,21 +2735,22 @@ async def run_bridge(args) -> None:
                         audio_b64 = base64.b64encode(
                             audio_sent_f32.tobytes()
                         ).decode("ascii")
-                        payload = {
-                            "type": "audio_chunk",
-                            "audio_base64": audio_b64,
-                        }
+                        # 新架构：input.append，音频/视频帧放进 input.*
+                        _input: dict[str, Any] = {"audio": audio_b64}
                         if frame_b64_list:
-                            payload["frame_base64_list"] = frame_b64_list
+                            _input["video_frames"] = frame_b64_list  # 旧 frame_base64_list
                         # 主动打断：这个 chunk 强制 worker 进入 LISTEN
                         if barge_force_listen:
-                            payload["force_listen"] = True
+                            _input["force_listen"] = True
+                        # runtime skill 字段：gateway 纯透传给 worker；需 worker 侧支持，
+                        # 不支持时被忽略，不影响音视频主链路。
                         if runtime_skill_payload is not None:
-                            payload["runtime_text"] = runtime_skill_payload["runtime_text"]
-                            payload["runtime_event_id"] = runtime_skill_payload["event_id"]
-                            payload["runtime_intent"] = runtime_skill_payload["intent"]
-                            payload["runtime_target"] = runtime_skill_payload["target"]
-                            payload["runtime_user_text"] = runtime_skill_payload["user_text"]
+                            _input["runtime_text"] = runtime_skill_payload["runtime_text"]
+                            _input["runtime_event_id"] = runtime_skill_payload["event_id"]
+                            _input["runtime_intent"] = runtime_skill_payload["intent"]
+                            _input["runtime_target"] = runtime_skill_payload["target"]
+                            _input["runtime_user_text"] = runtime_skill_payload["user_text"]
+                        payload = {"type": "input.append", "input": _input}
 
                         behind_ms = int(ring.latest_ts_ms - target_end_ts)
                         await image_state.note_audio(
@@ -2823,9 +2941,9 @@ async def run_bridge(args) -> None:
 #   格式（devices.json）：
 #     {
 #       "devices": [
-#         {"name": "左镜",  "esp32_host": "192.0.2.10", "esp32_port": 80},
-#         {"name": "右镜",  "esp32_host": "192.0.2.11", "esp32_port": 80},
-#         {"name": "备用镜", "esp32_host": "192.0.2.12", "esp32_port": 80}
+#         {"name": "左镜",  "esp32_host": "192.168.43.147", "esp32_port": 80},
+#         {"name": "右镜",  "esp32_host": "192.168.43.148", "esp32_port": 80},
+#         {"name": "备用镜", "esp32_host": "192.168.43.149", "esp32_port": 80}
 #       ]
 #     }
 #
@@ -2904,12 +3022,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         "未给且无 --device-config 时用内置默认。")
     p.add_argument("--esp32-port", type=int, default=None,
                    help="ESP32 端口（默认 80）")
-    p.add_argument(
-        "--audio-endpoint",
-        default="/ws_audio_v2",
-        choices=["/ws_audio", "/ws_audio_v2"],
-        help="ESP32 音频 WebSocket 端点；必须与固件协议匹配",
-    )
     # ── 多设备配置文件（多副眼镜 IP 列表）──
     p.add_argument("--device-config", default=None,
                    help="设备列表 JSON 文件（含多副眼镜的 IP），见文件顶部 _load_device_config 说明")
@@ -3105,6 +3217,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
+_DEFAULT_ESP32_HOST = "10.100.7.160"
 _DEFAULT_ESP32_PORT = 80
 
 
@@ -3136,10 +3249,9 @@ def main() -> None:
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
         LOGGER.error("[DEV] 设备配置读取失败: %s", e)
         sys.exit(2)
-    # Host 必须来自命令行或本地设备配置，避免把现场地址写进公共源码。
+    # 回填 host/port 默认值（命令行/配置文件都没给时用内置默认）
     if args.esp32_host is None:
-        LOGGER.error("[DEV] 缺少 ESP32 地址；请提供 --device-config/--device 或 --esp32-host")
-        sys.exit(2)
+        args.esp32_host = _DEFAULT_ESP32_HOST
     if args.esp32_port is None:
         args.esp32_port = _DEFAULT_ESP32_PORT
     # 回填 rotate 默认 90（命令行/配置文件都没给时）
