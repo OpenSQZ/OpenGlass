@@ -107,23 +107,21 @@ The currently exercised maintainer path uses:
 
 Model weights are not distributed by this repository.
 
-### 2. Clone the pinned upstream revisions
+### 2. Clone the V2 upstream master branches
 
 Keep all three repositories independent. Do not copy OpenSQZ Glass files into MiniCPM-o-Demo.
 
+The public launcher follows the current V2 process chain: `llama-omni-server` -> `worker` -> `gateway` -> `demo`. It targets the maintained `master` branches of both upstream projects. The three-process V1 chain used for the WAIC demonstration (`worker` launching `llama-server` itself) is a historical setup, not the default installation path documented here.
+
 ```powershell
-git clone https://github.com/tc-mb/llama.cpp-omni.git
+git clone --branch master https://github.com/tc-mb/llama.cpp-omni.git
 cd llama.cpp-omni
-git checkout feat/web-demo
-git checkout 5202b7b
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DLLAMA_CURL=OFF
 cmake --build build --config Release --target llama-omni-server -j
 cd ..
 
-git clone https://github.com/OpenBMB/MiniCPM-o-Demo.git
+git clone --branch master https://github.com/OpenBMB/MiniCPM-o-Demo.git
 cd MiniCPM-o-Demo
-git checkout Comni
-git checkout 9af4308
 python -m pip install -r requirements.txt
 cd ..
 
@@ -132,11 +130,11 @@ cd OpenGlass
 python -m pip install -r runtime/openglass_omni/requirements.txt
 ```
 
-These revisions match [`runtime/openglass_omni/upstream-lock.json`](runtime/openglass_omni/upstream-lock.json). Newer upstream revisions may change ports, arguments, process ownership, or whether `worker.py` launches `llama-omni-server` itself.
+Because upstream `master` branches can change, record the exact commit SHAs used for every validated OpenSQZ Glass runtime release. Upstream changes may alter ports, arguments, protocols, TTS behavior, or process ownership.
 
 ### 3. Prepare the model files
 
-Place the MiniCPM-o 4.5 GGUF modules in one external directory. The current launcher expects the main model path passed with `-m`; the vision, audio, TTS, and Token2Wav files must follow the layout required by your pinned `llama.cpp-omni` revision.
+Place the MiniCPM-o 4.5 GGUF modules in one external directory. The current launcher expects the main model path passed with `-m`; the vision, audio, TTS, and Token2Wav files must follow the layout required by your checked-out `llama.cpp-omni` revision.
 
 ```text
 MiniCPM-o-4_5-gguf/
@@ -295,7 +293,7 @@ The ACL 2026 paper documents the OpenGlass-Core research snapshot. It does not d
 
 ## License and Contributing
 
-Apache License 2.0 has been selected for OpenSQZ Glass. A root `LICENSE` file is not yet present in the current repository and must be added before a formal tagged release; this README alone is not a substitute for the license text.
+OpenSQZ Glass is distributed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
 
 Issues and focused pull requests are welcome at the [OpenSQZ/OpenGlass repository](https://github.com/OpenSQZ/OpenGlass). Before contributing:
 
@@ -303,5 +301,3 @@ Issues and focused pull requests are welcome at the [OpenSQZ/OpenGlass repositor
 - Keep MiniCPM-o-Demo and `llama.cpp-omni` as independent upstream checkouts rather than copied source trees.
 - Mark experimental device/backend combinations honestly and avoid production-readiness or certified-safety claims.
 - Document the exact upstream branch and commit used for runtime changes.
-
-Dedicated `LICENSE`, `CONTRIBUTING.md`, and security-policy files are planned repository work.

@@ -107,23 +107,21 @@ flowchart LR
 
 本仓库不分发模型权重。
 
-### 2. Clone 固定版本的上游依赖
+### 2. Clone V2 上游项目的 master 分支
 
 三个仓库必须保持相互独立，不要把 OpenSQZ Glass 的文件复制进 MiniCPM-o-Demo。
 
+当前公开启动器采用 V2 四进程链路：`llama-omni-server` -> `worker` -> `gateway` -> `demo`，对应两个上游项目仍在维护的 `master` 分支。WAIC 演示使用的 V1 三进程链路由 `worker` 自行启动 `llama-server`，属于历史运行方案，不再作为本 README 的默认安装路径。
+
 ```powershell
-git clone https://github.com/tc-mb/llama.cpp-omni.git
+git clone --branch master https://github.com/tc-mb/llama.cpp-omni.git
 cd llama.cpp-omni
-git checkout feat/web-demo
-git checkout 5202b7b
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DLLAMA_CURL=OFF
 cmake --build build --config Release --target llama-omni-server -j
 cd ..
 
-git clone https://github.com/OpenBMB/MiniCPM-o-Demo.git
+git clone --branch master https://github.com/OpenBMB/MiniCPM-o-Demo.git
 cd MiniCPM-o-Demo
-git checkout Comni
-git checkout 9af4308
 python -m pip install -r requirements.txt
 cd ..
 
@@ -132,11 +130,11 @@ cd OpenGlass
 python -m pip install -r runtime/openglass_omni/requirements.txt
 ```
 
-这些版本与 [`runtime/openglass_omni/upstream-lock.json`](runtime/openglass_omni/upstream-lock.json) 一致。更新的上游版本可能改变端口、启动参数、进程所有权，或者改成由 `worker.py` 自己启动 `llama-omni-server`。
+由于上游 `master` 分支会持续变化，每次完成 OpenSQZ Glass 运行时验证和正式发布时，都应记录实际测试过的 Commit SHA。上游更新可能改变端口、启动参数、通信协议、TTS 行为或进程所有权。
 
 ### 3. 准备模型文件
 
-将 MiniCPM-o 4.5 GGUF 模块放在仓库之外的同一个目录中。当前启动器通过 `-m` 接收主模型路径；vision、audio、TTS 和 Token2Wav 文件应遵循固定版本 `llama.cpp-omni` 要求的目录结构。
+将 MiniCPM-o 4.5 GGUF 模块放在仓库之外的同一个目录中。当前启动器通过 `-m` 接收主模型路径；vision、audio、TTS 和 Token2Wav 文件应遵循当前 checkout 的 `llama.cpp-omni` 版本所要求的目录结构。
 
 ```text
 MiniCPM-o-4_5-gguf/
@@ -295,7 +293,7 @@ ACL 2026 论文对应 OpenGlass-Core 研究快照，并不代表 OpenSQZ Glass �
 
 ## License 与贡献
 
-OpenSQZ Glass 已选择 Apache License 2.0。当前仓库根目录还没有正式的 `LICENSE` 文件，必须在正式打 Tag 发布前补齐；README 本身不能替代完整的许可证文本。
+OpenSQZ Glass 采用 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) 开源许可。
 
 欢迎通过 [OpenSQZ/OpenGlass](https://github.com/OpenSQZ/OpenGlass) 提交 Issue 和范围清晰的 Pull Request。贡献前请注意：
 
@@ -303,5 +301,3 @@ OpenSQZ Glass 已选择 Apache License 2.0。当前仓库根目录还没有正�
 - MiniCPM-o-Demo 与 `llama.cpp-omni` 应保持为独立的上游 checkout，不要复制源码进本仓库。
 - 如实标注实验性的设备/后端组合，不要声称生产就绪或通过安全认证。
 - 修改运行时必须记录使用的上游分支和 Commit。
-
-独立的 `LICENSE`、`CONTRIBUTING.md` 和安全策略文件属于后续仓库工作。
