@@ -1,0 +1,128 @@
+version: 2
+default_skill: idle_chat
+
+harness:
+  enabled: false
+  host: 127.0.0.1
+  port: 8021
+  allow_test_injection: false
+
+asr:
+  engine: funasr
+  model_path: ""
+  device: cpu
+  rms_threshold: 0.012
+  min_speech_ms: 180
+  end_silence_ms: 450
+  max_utterance_ms: 8000
+  preroll_ms: 200
+
+echo_guard:
+  window_ms: 20000
+  similarity_threshold: 0.86
+
+cv:
+  mode: shadow
+  max_fps: 1
+  queue_size: 1
+  inference_timeout_ms: 2000
+  providers:
+    noop:
+      type: noop
+    yolo_onnx:
+      type: yolo_onnx
+      # Resolved relative to this YAML. Weights stay in OpenGlass/models and
+      # are ignored by Git; the Core never downloads them implicitly.
+      model_path: ../../../models/yolo26n.onnx
+      device: cpu
+      confidence: 0.25
+      image_size: 640
+
+control:
+  cooldown_ms: 1200
+  stop_speech:
+    # `同一下` / `等一(一)下` are bounded aliases observed from the local
+    # FunASR model when the user clearly says the short command `停一下`.
+    # They are command-only aliases, not arbitrary substring anchors.
+    phrases: [停一下, 同一下, 等一下, 等一一下, 别说了, 闭嘴, 停止播报, 安静]
+    # Literal substring protocol: any transcript containing this anchor stops.
+    embedded_phrases: [停一下]
+  resume_speech:
+    # Literal substring protocol: any transcript containing this anchor resumes.
+    embedded_phrases: [恢复对话]
+  reset_session:
+    phrases: [重新开始]
+    # Literal substring protocol for real voice RESET. Product deployments can
+    # later prepend a wake name (for example "乐奇重新开始") without changing
+    # the deterministic router.
+    embedded_phrases: [重新开始]
+  return_to_chat:
+    phrases: [回到聊天, 回到普通聊天, 退出技能, 普通聊天, 恢复普通聊天]
+  cancel_skill:
+    phrases: [取消任务, 不找了, 不读了]
+
+skills:
+  idle_chat:
+    enabled: true
+    prompt_file: ../prompts/idle_chat_zh.txt
+    requires_session_restart: true
+    cooldown_ms: 1200
+    cv_mode: disabled
+    cv_provider: noop
+    activation_phrases: [普通聊天, 回到聊天]
+
+  find_object:
+    enabled: true
+    description: 使用第一视角画面寻找语音中指定的物体
+    prompt_source: AAAI_SI/C1_OBJECT_FINDING
+    prompt_file: ../prompts/find_object_zh.txt
+    requires_session_restart: true
+    cooldown_ms: 1500
+    cv_mode: shadow
+    cv_provider: yolo_onnx
+    task_trigger: '请立即根据当前画面寻找“{{target}}”，只回答它的位置；如果没看到就说没看到。'
+    slot_schema:
+      target: {type: string, required: true}
+    activation_patterns:
+      - "帮我找(?:一下)?(?:我的)?(?P<target>.+)"
+      - "帮我找(?P<target>.+)"
+      - "(?P<target>.+)在哪"
+      - "(?P<target>.+)在哪里"
+      - "看到(?P<target>.+)了吗"
+      - "有没有(?P<target>.+)"
+
+  read_text:
+    enabled: true
+    description: 读取当前画面中清晰可见的文字
+    prompt_source: AAAI_SI/C1_TEXT_READING
+    prompt_file: ../prompts/read_text_zh.txt
+    requires_session_restart: true
+    cooldown_ms: 1500
+    cv_mode: shadow
+    cv_provider: noop
+    task_trigger: 请立即读取当前画面中最明显的文字，只读看到的内容。
+    activation_phrases: [读一下, 念一下, 帮我读一下, 帮我识字, 帮我读字, 上面写了什么, 这是什么字, 读文字]
+
+  describe_scene:
+    enabled: true
+    prompt_file: ../prompts/describe_scene_zh.txt
+    requires_session_restart: true
+    cooldown_ms: 1500
+    cv_mode: shadow
+    cv_provider: noop
+    task_trigger: 请立即用一两句话简短描述当前画面。
+    activation_phrases: [描述一下, 帮我描述一下, 帮我描述场景, 前面有什么, 看看周围, 画面里有什么]
+
+  obstacle_avoidance:
+    # Experimental: enabled only for stationary, supervised browser validation.
+    # It is not a mobility-safety guarantee and must not be used for navigation.
+    enabled: true
+    description: 识别前方可见障碍并给出保守提示（实验）
+    prompt_source: AAAI_SI/C1_OBSTACLE_AVOID_DIRECT_V1
+    prompt_file: ../prompts/obstacle_avoidance_zh.txt
+    requires_session_restart: true
+    cooldown_ms: 1500
+    cv_mode: shadow
+    cv_provider: noop
+    task_trigger: 请立即判断当前画面前方是否有明显障碍，并给出简短、保守的安全提示。
+    activation_phrases: [帮我避障, 前面有障碍吗, 前面有没有障碍, 看一下前方障碍, 前面安全吗]

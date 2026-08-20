@@ -1,0 +1,4 @@
+# Optional dependencies for the bundled YOLO ONNX reference provider.
+# OCR providers should declare their model-specific dependencies separately.
+onnxruntime>=1.18
+opencv-python>=4.9

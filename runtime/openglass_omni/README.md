@@ -1,6 +1,10 @@
 # OpenGlass Omni Runtime
 
-This directory holds OpenGlass's own control panel, the ESP32 audio/video bridge, the Rokid link, and the local session recording / replay code. The MiniCPM-o-Demo and llama.cpp-omni projects stay **external** — nothing here is copied into an upstream directory, and this panel never downloads, builds, or rewrites upstream config.
+This directory holds OpenGlass's control panel, ESP32 audio/video bridge, Rokid
+link, and local recording/replay code. The shared voice-command Core is included
+in this repository at `extensions/assistive_harness/`. MiniCPM-o-Demo,
+llama.cpp-omni, their workers and large-model weights remain **external**; this
+panel never downloads, builds, or rewrites their upstream configuration.
 
 This is an experimental research integration. It is not production-ready, not a certified navigation aid, and not validated for unbounded-length sessions.
 
@@ -17,10 +21,14 @@ This is an experimental research integration. It is not production-ready, not a 
 | `bridge_ui.py` | Local web server (default `http://localhost:8080`) for the live first-person view embedded in the panel, plus a `/replay` session browser. Without it, the panel's right pane is blank. |
 | `recorder_live.py` | Records every session to `sessions/` (video, user/AI audio tracks, `events.jsonl` subtitles, `meta.json`). |
 | `rerun_source.py` | Replays a recorded session back through the model (see [Rerun mode](#rerun-mode-command-line)). Not wired into the panel. |
+| `perception/` | Optional non-blocking CV shadow providers. Includes a YOLO ONNX reference and an OCR provider template. |
 | `devices.json` | Glasses IP / rotation table. The panel's device dropdown follows this file. |
 | `templates/` | `live.html`, `replay.html`, `replay_index.html` — served by `bridge_ui.py`. |
 
 The entry point is the repository-root `glasses_panel.py`, an 8-line shim that calls `runtime.openglass_omni.panel:main`.
+
+For the Phase A/Phase B control contract, ESP32 commands, and the OCR plugin
+handoff, see the [Chinese V1.1 guide](../../docs/phase_ab_esp32_ocr_handoff_zh.md).
 
 ## Process chain
 
@@ -117,7 +125,9 @@ Watch the rerun via the bridge's own live view at `http://localhost:<ui-port>/`.
 ## Current boundaries
 
 - The panel starts and supervises processes and shows the first-person view; it does not own model weights, backend paths, or upstream configuration.
-- `worker.py` / `gateway.py` and the model weights come from external upstream projects and are not vendored here.
+- `worker.py` / `gateway.py` and large-model weights come from external upstream
+  projects and are not vendored here. The small Harness Core itself is vendored
+  under `extensions/assistive_harness/` and can be installed from this clone.
 - The Rokid link is included, but its gateway protocol may differ from the ESP32 link depending on your build; treat the ESP32 link as the primary supported path.
 - One-click rerun from within the panel is not implemented; rerun is the command-line workflow above.
 - Session output under `sessions/` may contain faces, surroundings, voices, and device addresses. Review it before sharing or publishing.

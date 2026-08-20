@@ -112,6 +112,8 @@ except Exception:  # rerun 依赖缺失时不影响 live
     local_pcm_reader = None
     LocalImageSource = None
 
+from perception.shadow_runtime import ShadowPerceptionRuntime
+
 ASR_RUNTIME_DIR = Path(__file__).resolve().parent / "ASR"
 if str(ASR_RUNTIME_DIR) not in sys.path:
     sys.path.insert(0, str(ASR_RUNTIME_DIR))
@@ -1090,6 +1092,7 @@ async def audio_first_image_cache_loop(
     image_state: AudioFirstImageState,
     stop_evt: asyncio.Event,
     stats: dict[str, Any],
+    cv_shadow: Optional[ShadowPerceptionRuntime] = None,
 ) -> None:
     if not args.use_image:
         return
@@ -1173,6 +1176,12 @@ async def audio_first_image_cache_loop(
             if img_jpeg:
                 stats["image_ok"] += 1
                 LOGGER.info("[IMG] cache updated seq=%d age=%dms", seq, age_ms)
+                if cv_shadow is not None:
+                    cv_shadow.submit(
+                        img_jpeg,
+                        frame_id=f"esp32_{seq}_{int(time.time() * 1000)}",
+                        timestamp_ms=time.time() * 1000.0,
+                    )
             else:
                 stats["image_fail"] += 1
         except asyncio.CancelledError:
@@ -1929,6 +1938,29 @@ async def run_bridge(args) -> None:
         noise_level_db=args.echo_noise_db,
     )
     stop_evt = asyncio.Event()
+    cv_shadow: Optional[ShadowPerceptionRuntime] = None
+    if args.cv_shadow_provider:
+        try:
+            provider_options = json.loads(args.cv_shadow_options_json)
+            provider_slots = json.loads(args.cv_shadow_slots_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid CV shadow JSON: {exc}") from exc
+        if not isinstance(provider_options, dict) or not isinstance(provider_slots, dict):
+            raise ValueError("CV shadow options and slots must be JSON objects")
+        cv_shadow = ShadowPerceptionRuntime(
+            args.cv_shadow_provider,
+            options=provider_options,
+            skill_id=args.cv_shadow_skill,
+            slots=provider_slots,
+            log_path=args.cv_shadow_log,
+            inference_timeout_ms=args.cv_shadow_timeout_ms,
+        )
+        LOGGER.info(
+            "[CV] shadow enabled provider=%s skill=%s log=%s",
+            args.cv_shadow_provider,
+            args.cv_shadow_skill,
+            args.cv_shadow_log,
+        )
 
     # v6.6 移植：把 SIGINT/SIGTERM 改成"设旗子让主循环干净退",
     # 避免 KeyboardInterrupt 在 cleanup 中段抛出导致 finalize_mp4 被跳过。
@@ -2326,7 +2358,9 @@ async def run_bridge(args) -> None:
                 # v6.6 移植：live 用图像优化路（abort/cache）；rerun 用直读路，不启动该 loop
                 if rerun_img_source is None:
                     image_cache_task = asyncio.create_task(
-                        audio_first_image_cache_loop(args, image_state, stop_evt, run_stats)
+                        audio_first_image_cache_loop(
+                            args, image_state, stop_evt, run_stats, cv_shadow
+                        )
                     )
                 else:
                     image_cache_task = None
@@ -2906,6 +2940,13 @@ async def run_bridge(args) -> None:
             except Exception as e:
                 LOGGER.warning("[ASR] stop err: %r", e)
 
+        if cv_shadow is not None:
+            try:
+                await cv_shadow.close()
+                LOGGER.info("[CV] shadow stopped stats=%s", cv_shadow.snapshot())
+            except Exception as e:
+                LOGGER.warning("[CV] shadow close err: %r", e)
+
         for _t in (player_monitor, audio_reader_task, recv_task, image_cache_task):
             if _t is None:
                 continue
@@ -3075,6 +3116,37 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="取图超时时本轮不带任何图、只发音频(默认关:超时则沿用上一帧旧图)")
     p.add_argument("--use-image", action="store_true", default=True)
     p.add_argument("--no-image", dest="use_image", action="store_false")
+    p.add_argument(
+        "--cv-shadow-provider",
+        default="",
+        help="可选 CV 旁路 provider：内置别名或 package.module:Class；空值为关闭",
+    )
+    p.add_argument(
+        "--cv-shadow-options-json",
+        default="{}",
+        help="传给 provider 构造函数的 JSON 对象",
+    )
+    p.add_argument(
+        "--cv-shadow-skill",
+        default="idle_chat",
+        help="写入 CVObservation 的 skill_id",
+    )
+    p.add_argument(
+        "--cv-shadow-slots-json",
+        default="{}",
+        help="传给 provider analyze() 的 slots JSON 对象",
+    )
+    p.add_argument(
+        "--cv-shadow-timeout-ms",
+        type=float,
+        default=2000.0,
+        help="单次旁路推理超时，仅记录错误，不阻塞音频主链路",
+    )
+    p.add_argument(
+        "--cv-shadow-log",
+        default="logs/cv_events.jsonl",
+        help="CVObservation JSONL 输出路径",
+    )
     p.add_argument("--audio-wait-timeout-s", type=float, default=3.0,
                    help="log every N seconds while waiting for timestamped audio backfill")
     p.add_argument("--audio-max-gap-fill-ms", type=int, default=0,
