@@ -670,6 +670,16 @@ class GatewayDuplexSession:
                 ]
                 last_frame_sequence = frame.sequence
                 last_frame_sent = time.monotonic()
+            # 诊断：真正送进 gateway 的每个 chunk。audio=xxpps 那个统计的是
+            # "推进 audio_queue 的包数"，看不出这里有没有按 1Hz 正常发出去。
+            self._sent_chunks = getattr(self, "_sent_chunks", 0) + 1
+            _lvl = float(np.abs(audio).mean()) if audio is not None else 0.0
+            LOG.debug("[GW-SEND] #%d audio=%.2fs lvl=%.4f frame=%s hold=%s",
+                     self._sent_chunks,
+                     (len(audio) / SAMPLE_RATE_IN) if audio is not None else 0.0,
+                     _lvl,
+                     "frame_base64_list" in payload,
+                     self.gate.speech_hold_active)
             await self._send_json(payload)
 
     async def inject_task(self, text: str) -> bool:
@@ -709,6 +719,22 @@ class GatewayDuplexSession:
                 message_type = payload.get("type")
                 if message_type in {"result", "audio_only"}:
                     await self.on_result(self, payload)
+                elif message_type == "hint_audio":
+                    # 强制措施念提示：独立播放，不进 on_result 状态机
+                    # （不记 model_turn / 不发 model.state / 不触发 EchoGuard），
+                    # 避免和 duplex 主对话抢话、纠缠。
+                    hint_b64 = str(payload.get("audio_data") or "")
+                    if hint_b64:
+                        try:
+                            pcm = np.frombuffer(base64.b64decode(hint_b64), dtype=np.float32)
+                            # 念提示前先解除可能的 block（stop 时 block_and_flush 过），
+                            # 否则 enqueue 会被丢。
+                            await self.speaker.resume()
+                            await self.speaker.enqueue(pcm, self.spec.generation)
+                            LOG.info("[HINT] 念提示播放: %r (%d samples)",
+                                     payload.get("text"), int(pcm.size))
+                        except Exception as exc:
+                            LOG.warning("[HINT] 念提示播放失败: %s", exc)
                 elif message_type == "stopped":
                     return
                 elif message_type in {"timeout", "error"}:
@@ -1081,6 +1107,18 @@ class GatewaySessionManager:
                 self.gate.dropped_old_text += 1
             if audio_b64:
                 self.gate.dropped_old_audio += 1
+            # 诊断：这条路径原本静默 return，模型的输出被整个丢掉却不留痕迹
+            #（表现就是 ai(calls=0) + [MODEL] 只有孤零零一条）。打出丢弃原因。
+            self._drop_n = getattr(self, "_drop_n", 0) + 1
+            if self._drop_n <= 3 or self._drop_n % 100 == 0:
+                LOG.warning(
+                    "[GW-DROP] #%d stale=%s (active=%s gen_sess=%s gen_gate=%s) "
+                    "drop_until_listen=%s is_listen=%s text=%r audio=%dB",
+                    self._drop_n, stale,
+                    session is self.active,
+                    session.spec.generation, self.gate.generation,
+                    self.gate.drop_output_until_listen, is_listen,
+                    text[:20], len(audio_b64))
             return
         if is_listen and self.gate.drop_output_until_listen:
             if not self.gate.speech_hold_active:
@@ -1160,6 +1198,10 @@ class HarnessClient:
         self._send_lock = asyncio.Lock()
         self._control_tasks: set[asyncio.Task[Any]] = set()
 
+    # 外部可挂的只读观察者：收到未被上面分支处理的消息时调用（同步、异常吞掉）。
+    # 不改构造签名，赋值即可：client.on_message = fn
+    on_message = None
+
     async def run(self) -> None:
         while not self._stop.is_set():
             try:
@@ -1188,6 +1230,15 @@ class HarnessClient:
                                 )
                                 self._control_tasks.add(task)
                                 task.add_done_callback(self._control_tasks.discard)
+                            # 可选旁路：把其余消息（如 asr.transcript）交给外部观察者。
+                            # 默认 None，行为与原来完全一致。8021 的 asr.transcript 只投递给
+                            # "送音频进来的那个 client" 的 outbound 队列（每个 client_id 有
+                            # 独立 runtime），另开一条连接是收不到的，只能在这里截。
+                            elif self.on_message is not None:
+                                try:
+                                    self.on_message(payload)
+                                except Exception:
+                                    pass
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

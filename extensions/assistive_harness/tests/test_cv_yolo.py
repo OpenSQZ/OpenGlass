@@ -9,7 +9,13 @@ import numpy as np
 from extensions.assistive_harness.cv.yolo_onnx import YoloOnnxProvider
 
 
-MODEL = Path(__file__).resolve().parents[3] / "models" / "yolo26n.onnx"
+MODEL = (
+    Path(__file__).resolve().parents[4]
+    / "OmniHarness"
+    / "mini_omni_harness"
+    / "models"
+    / "yolo26n.onnx"
+)
 
 
 @unittest.skipUnless(MODEL.is_file(), "local YOLO reference weights are unavailable")

@@ -89,3 +89,4 @@ class EnergyVAD:
         self._active = []
         self._started_at_ms = None
         self._last_voice_ms = None
+

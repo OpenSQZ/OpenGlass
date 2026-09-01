@@ -27,3 +27,4 @@ class ScriptedASREngine:
         del audio, sample_rate
         text = self.transcripts.pop(0) if self.transcripts else ""
         return ASRResult(text=text, confidence=1.0, model="scripted", device="cpu")
+

@@ -31,9 +31,9 @@ cv:
       type: noop
     yolo_onnx:
       type: yolo_onnx
-      # Resolved relative to this YAML. Weights stay in OpenGlass/models and
-      # are ignored by Git; the Core never downloads them implicitly.
-      model_path: ../../../models/yolo26n.onnx
+      # Resolved relative to this YAML. Keep weights outside the Core so the
+      # same plugin can be reused by the later OpenGlass Adapter.
+      model_path: ../../../../OmniHarness/mini_omni_harness/models/yolo26n.onnx
       device: cpu
       confidence: 0.25
       image_size: 640

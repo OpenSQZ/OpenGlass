@@ -1,23 +1,7 @@
-# Assistive Voice Skill Harness (Phase A / Phase B Core)
+# Assistive Voice Skill Harness (Phase A)
 
-This directory is the transport-neutral control Core shared by the optional
-MiniCPM-o browser sidecar and OpenGlass Phase B device adapters. It is disabled
-by default and does not replace the native microphone/video path.
-
-## Clean-clone setup
-
-From the OpenGlass repository root, install the Core and explicitly download
-the public ASR model:
-
-```powershell
-python -m pip install -r extensions/assistive_harness/requirements.txt
-python -m extensions.assistive_harness.download_modelscope_model
-```
-
-The second command prints the downloaded local directory and a complete start
-command. Model weights are not stored in this Git repository. The runtime never
-downloads a model implicitly: `--model-path` must point to an existing local
-directory, otherwise startup fails clearly.
+This directory is an optional, local sidecar for the MiniCPM-o browser Demo. It is
+disabled by default and does not replace the native microphone/video path.
 
 Start the sidecar explicitly:
 
@@ -26,10 +10,7 @@ python -m extensions.assistive_harness.server --enabled `
   --model-path "C:\path\to\a\local\FunASR\model"
 ```
 
-Then opt the browser tab in with `?assistive_harness=1`. Browser integration
-assets and their hook contract live in
-[`../../integrations/minicpm_browser/`](../../integrations/minicpm_browser/).
-Test-only transcript
+Then opt the browser tab in with `?assistive_harness=1`. Test-only transcript
 injection additionally requires `--allow-test-injection`; it is never enabled by
 the normal command above.
 

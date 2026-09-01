@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>AI 眼镜 · 回访</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0
+        }
+
+        html, body {
+            height: 100%
+        }
+
+        body {
+            font-family: -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+            background: #0a0e1a;
+            color: #e8ecf4;
+            overflow: hidden
+        }
+
+        .app {
+            display: grid;
+            grid-template-rows: auto 1fr;
+            height: 100vh
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 24px;
+            background: linear-gradient(180deg,#0f1629 0%,transparent 100%);
+            border-bottom: 1px solid rgba(255,255,255,.06);
+            z-index: 10
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 16px;
+            font-weight: 600
+        }
+
+        .brand-icon {
+            font-size: 26px
+        }
+
+        .brand-sub {
+            color: #8a93a8;
+            font-weight: 400;
+            font-size: 12px;
+            margin-top: 2px
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 10px
+        }
+
+        .pill {
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: rgba(255,255,255,.06);
+            font-size: 12px;
+            color: #b5bdd0;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px
+        }
+
+        .icon-btn {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,.1);
+            color: #b5bdd0;
+            padding: 7px 13px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            text-decoration: none;
+            transition: all .15s
+        }
+
+            .icon-btn:hover {
+                border-color: rgba(255,255,255,.3);
+                color: #fff
+            }
+
+        main {
+            padding: 20px 24px;
+            overflow-y: auto;
+            min-height: 0
+        }
+
+        .wrap {
+            max-width: 1200px;
+            margin: 0 auto
+        }
+
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+            color: #8a93a8;
+            font-size: 13px
+        }
+
+        .table-panel {
+            background: rgba(255,255,255,.03);
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,.06);
+            overflow: hidden
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px
+        }
+
+        thead th {
+            padding: 14px 18px;
+            text-align: left;
+            color: #6b7490;
+            font-weight: 500;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: .08em;
+            background: rgba(255,255,255,.02);
+            border-bottom: 1px solid rgba(255,255,255,.06)
+        }
+
+        tbody td {
+            padding: 14px 18px;
+            border-bottom: 1px solid rgba(255,255,255,.04);
+            color: #dfe6f5
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none
+        }
+
+        tbody tr {
+            transition: background .15s;
+            cursor: pointer
+        }
+
+            tbody tr:hover {
+                background: rgba(255,255,255,.04)
+            }
+
+                tbody tr:hover td:first-child {
+                    color: #8ab4ff
+                }
+
+        td a {
+            color: inherit;
+            text-decoration: none;
+            font-family: 'SF Mono',ui-monospace,Menlo,monospace
+        }
+
+        .tag {
+            display: inline-block;
+            padding: 3px 9px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: .3px
+        }
+
+            .tag.mp4 {
+                background: rgba(93,211,158,.15);
+                color: #5dd39e
+            }
+
+            .tag.m4a {
+                background: rgba(246,193,119,.15);
+                color: #f6c177
+            }
+
+            .tag.none {
+                background: rgba(235,111,146,.15);
+                color: #eb6f92
+            }
+
+        .num {
+            font-family: 'SF Mono',ui-monospace,Menlo,monospace;
+            color: #b5bdd0
+        }
+
+        .time {
+            font-family: 'SF Mono',ui-monospace,Menlo,monospace;
+            color: #8a93a8;
+            font-size: 12px
+        }
+
+        .empty {
+            padding: 60px;
+            text-align: center;
+            color: #4a556f;
+            font-size: 14px
+        }
+
+            .empty .big {
+                font-size: 48px;
+                margin-bottom: 12px;
+                opacity: .4
+            }
+
+        .loading {
+            padding: 40px;
+            text-align: center;
+            color: #6b7490;
+            font-size: 13px
+        }
+
+        main::-webkit-scrollbar {
+            width: 8px
+        }
+
+        main::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,.08);
+            border-radius: 4px
+        }
+
+            main::-webkit-scrollbar-thumb:hover {
+                background: rgba(255,255,255,.15)
+            }
+    </style>
+</head>
+<body>
+
+    <div class="app">
+        <header>
+            <div class="brand">
+                <span class="brand-icon">🕶</span>
+                <div>
+                    <div>AI 眼镜 · 会话回访</div>
+                    <div class="brand-sub">Session replay &amp; offline inspection</div>
+                </div>
+            </div>
+            <div class="header-right">
+                <span class="pill" id="countPill">— 条会话</span>
+                <a class="icon-btn" href="/">⬅ 返回实时</a>
+            </div>
+        </header>
+
+        <main>
+            <div class="wrap">
+                <div class="toolbar">
+                    <span>点击行进入回放 · 所有会话按时间倒序</span>
+                </div>
+                <div class="table-panel" id="content">
+                    <div class="loading">Loading…</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const $ = id => document.getElementById(id);
+
+        function fmtDur(start, end) {
+            if (!start || !end) return '–';
+            const s = Math.max(0, Math.round((new Date(end) - new Date(start)) / 1000));
+            if (s < 60) return s + 's';
+            const m = Math.floor(s / 60), r = s % 60;
+            return m + 'm ' + String(r).padStart(2, '0') + 's';
+        }
+
+        function fmtTime(iso) {
+            if (!iso) return '–';
+            try {
+                const d = new Date(iso);
+                const pad = n => String(n).padStart(2, '0');
+                return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+            } catch (e) { return iso; }
+        }
+
+        fetch('/api/sessions').then(r => r.json()).then(data => {
+            const c = $('content');
+            const sessions = data.sessions || [];
+            $('countPill').textContent = sessions.length + ' 条会话';
+
+            if (!sessions.length) {
+                c.innerHTML = '<div class="empty"><div class="big">📭</div>还没有任何会话记录</div>';
+                return;
+            }
+
+            let html = '<table><thead><tr>'
+                + '<th>Session ID</th><th>媒体</th><th>开始时间</th><th>时长</th><th>Chunks</th><th>Turns</th>'
+                + '</tr></thead><tbody>';
+            for (const s of sessions) {
+                const st = s.stats || {};
+                const dur = fmtDur(s.start_time, s.end_time);
+                let media = '<span class="tag none">NONE</span>';
+                if (s.media === 'mp4') media = '<span class="tag mp4">MP4</span>';
+                else if (s.media === 'm4a') media = '<span class="tag m4a">M4A</span>';
+                html += `<tr onclick="location.href='/replay/${s.id}'">`
+                    + `<td><a href="/replay/${s.id}">${s.id}</a></td>`
+                    + `<td>${media}</td>`
+                    + `<td class="time">${fmtTime(s.start_time)}</td>`
+                    + `<td class="num">${dur}</td>`
+                    + `<td class="num">${st.chunks_sent || 0}</td>`
+                    + `<td class="num">${st.turns || 0}</td>`
+                    + `</tr>`;
+            }
+            html += '</tbody></table>';
+            c.innerHTML = html;
+        }).catch(err => {
+            $('content').innerHTML = '<div class="empty"><div class="big">⚠</div>加载失败:' + err + '</div>';
+        });
+    </script>
+</body>
+</html>

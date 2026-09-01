@@ -15,10 +15,14 @@ restarting the Harness service.
 | `describe_scene` | `describe_scene_zh.txt` | enabled |
 | `obstacle_avoidance` | `obstacle_avoidance_zh.txt` | enabled / experimental |
 
-The find/read/obstacle task bodies were derived from the project's frozen
-AAAI_SI C1 prompts. `find_object_zh.txt` additionally contains `{{target}}`,
-because the new Session must receive the target extracted from the command
-that closed the old Session. No external absolute path is required at runtime.
+The find/read/obstacle task bodies were copied from the frozen AAAI_SI C1
+prompts. `find_object_zh.txt` additionally contains `{{target}}`, because the
+new Session must receive the target extracted from the command that closed the
+old Session.
+
+Source directory:
+
+`C:\Users\Lenovo\AI_Glasses_0618\AAAI_SI\submission_release\AAAI27_AISI_Anonymous_Code_Data\prompts`
 
 ## Editing an existing prompt
 

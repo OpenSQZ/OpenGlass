@@ -26,7 +26,7 @@ from .echo_guard import EchoGuard
 from .model_log import ModelTurnAccumulator
 from .registry import SkillRegistry
 from .router import RuleIntentRouter
-from .schemas import ASREvent, ControlIntent
+from .schemas import ASREvent, ControlEvent, ControlIntent
 from .state_machine import HarnessController
 from .telemetry import TelemetryWriter
 
@@ -424,6 +424,39 @@ class AssistiveHarnessService:
                 model="injected-test-only",
                 device="none",
             )
+        if message_type in ("funnel.stop", "funnel.resume"):
+            # 漏斗 reject/恢复:程序直接触发,不经 ASR/router 文字匹配。
+            # 复用 controller.process + STOP_SPEECH/RESUME_SPEECH,和真人「停一下/恢复对话」
+            # 走完全相同的下游(设备端收到 control.intent 执行 stop_speech/resume_speech)。
+            # 归口 8021:telemetry 统一记录,标 source=funnel 以区分真人还是漏斗触发。
+            is_stop = message_type == "funnel.stop"
+            intent = ControlIntent.STOP_SPEECH if is_stop else ControlIntent.RESUME_SPEECH
+            event = ControlEvent(
+                event_id=runtime.next_event_id(),
+                intent=intent,
+                utterance="[%s]" % message_type,
+                confidence=1.0,
+                asr_event_id=runtime.next_event_id(),
+                created_at_ms=now_ms(),
+                reason=str(message.get("reason") or "funnel"),
+            )
+            decision = runtime.controller.process(event, now_ms=event.created_at_ms)
+            payload = {
+                **decision.payload,
+                "accepted": decision.accepted,
+                "action": decision.action,
+                "decision_reason": decision.reason,
+                "source": "funnel",
+                "client_id": runtime.client_id,
+            }
+            runtime.telemetry.write("control", payload)
+            print(
+                "[AssistiveHarness][FUNNEL] "
+                "type=%s accepted=%s action=%s reason=%s"
+                % (message_type, decision.accepted, decision.action, event.reason),
+                flush=True,
+            )
+            return payload if decision.accepted else None
         if message_type == "model.state":
             event = dict(message)
             runtime.telemetry.write("model", event)

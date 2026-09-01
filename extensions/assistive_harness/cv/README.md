@@ -69,8 +69,8 @@ skills:
 ```
 
 Relative model paths are resolved against the YAML directory. Weights are not
-owned by the Core. The shipped sample resolves to the Git-ignored local file
-`OpenGlass/models/yolo26n.onnx`.
+owned by the Core. The current local sample points to the previously validated
+`OmniHarness/mini_omni_harness/models/yolo26n.onnx` file.
 
 ## Provider contract
 
