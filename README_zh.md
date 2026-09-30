@@ -20,6 +20,7 @@
 
 ## News
 
+- **[2026.09.30]** 📢📢📢 我们将 **Harness 语音控制与 MiniCPM-o 对话链路集成**，并适配了 **Rokid 眼镜**，支持无线音视频传输、面板一键启动和本地录制。[开始使用](#安装与启动)。
 - **[2026.08.04]** 📢📢📢 我们正式采用 **OpenSQZ Glass** 作为统一项目名称，汇集感知硬件、本地多模态运行时和相关研究方向。[查看项目概览](#项目概览)。
 - **[2026.08.03]** 🥳🥳🥳 我们将实验性的 [OmniRuntime](runtime/openglass_omni/README.md) 合入统一仓库，包括控制面板、ESP32 桥接、Prompt 切换和本地 Session 录制/回放工具。[立即体验！](#安装与启动)
 - **[2026.07.22]** 🔥🔥🔥 我们完整开源首版硬件材料，包括[可编辑 STEP 镜架](hardware/cad_3d_print/A02_frame_source.step)、[3MF 打印摆盘](hardware/cad_3d_print/A03_print_plate.3mf)、[物料清单（BOM）](hardware/bom/A01_bom_public.xlsx)、项目图片和[中英文制作教程](hardware/AI_GLASSES_OPEN_SOURCE_REPORT.md)。欢迎动手复现！
