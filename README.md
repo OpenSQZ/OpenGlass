@@ -20,6 +20,7 @@
 
 ## News
 
+- **[2026.09.30]** 📢📢📢 We integrated **Harness with MiniCPM-o** for voice-controlled conversations and added **Rokid glasses support**, including wireless audio/video streaming, one-click panel startup, and local recording. [Get started](#setup-and-run).
 - **[2026.08.04]** 📢📢📢 We introduce **OpenSQZ Glass** as the umbrella project for our sensing hardware, local multimodal runtimes, and related research tracks. [Explore the project](#overview).
 - **[2026.08.03]** 🥳🥳🥳 We integrated the experimental [OmniRuntime](runtime/openglass_omni/README.md), including the control panel, ESP32 bridge, prompt switching, and local session recording/replay tools. [Try it now!](#setup-and-run)
 - **[2026.07.22]** 🔥🔥🔥 We open-source the complete first hardware release: an [editable STEP frame](hardware/cad_3d_print/A02_frame_source.step), [3MF print plate](hardware/cad_3d_print/A03_print_plate.3mf), [bill of materials (BOM)](hardware/bom/A01_bom_public.xlsx), project images, and a [bilingual build guide](hardware/AI_GLASSES_OPEN_SOURCE_REPORT_EN.md). Try it out!
