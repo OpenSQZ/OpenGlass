@@ -93,3 +93,7 @@ live_sessions/
 *.keystore
 *.jks
 *.apk
+*.ipa
+*.xcframework/
+*.dSYM/
+artifacts/
