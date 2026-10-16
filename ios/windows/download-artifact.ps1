@@ -31,8 +31,31 @@ New-Item -ItemType Directory -Path $fullDestination | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Artifact download failed. Partial output remains for inspection: $fullDestination" }
 $ipa = Join-Path $fullDestination 'OpenGlass-1.0.ipa'
 if (-not (Test-Path -LiteralPath $ipa -PathType Leaf)) { throw "The artifact is missing OpenGlass-1.0.ipa: $fullDestination" }
+$manifestPath = Join-Path $fullDestination 'build-info.json'
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'The artifact is missing build-info.json.' }
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+foreach ($field in @('commit', 'signed', 'bundle_identifier')) {
+    if ($manifest.PSObject.Properties.Name -notcontains $field) { throw "build-info.json is missing $field." }
+}
+if ($manifest.commit -cne $run.head_sha) { throw 'Artifact manifest commit does not match the selected Actions run.' }
+if ($manifest.signed -isnot [bool] -or $manifest.signed) { throw 'Expected the manifest to declare signed=false (JSON boolean).' }
+if ($manifest.bundle_identifier -cne 'org.opensqz.openglass.ios') { throw 'Artifact manifest has an unexpected iOS bundle identifier.' }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive = [System.IO.Compression.ZipFile]::OpenRead($ipa)
+try {
+    $infoEntries = @($archive.Entries | Where-Object { $_.FullName -ceq 'Payload/OpenGlass.app/Info.plist' })
+    if ($infoEntries.Count -ne 1 -or $infoEntries[0].Length -le 0 -or $infoEntries[0].Length -gt 1MB) {
+        throw 'IPA must contain one non-empty Payload/OpenGlass.app/Info.plist of reasonable size.'
+    }
+    # Read the compressed entry without extracting any archive path to disk.
+    $infoStream = $infoEntries[0].Open()
+    try { $infoStream.CopyTo([System.IO.Stream]::Null) }
+    finally { $infoStream.Dispose() }
+} finally { $archive.Dispose() }
 Write-Host "Downloaded unsigned IPA: $ipa"
+Write-Host 'Verified manifest commit, unsigned status, bundle identifier, and readable IPA Info.plist entry.'
 Write-Host "Run: $($run.html_url)"
 Write-Host "Commit: $($run.head_sha)"
 Get-FileHash -LiteralPath $ipa -Algorithm SHA256 | Format-List
-Write-Host 'Next: sign/install with AltStore and AltServer on Windows. Downloading an unsigned IPA does not install or authorize it.'
+Write-Host 'Next: hold Shift while clicking the Windows AltServer tray icon, choose Sideload .ipa, and sign/install with your own Apple account in its UI.'
+Write-Host 'AltStore on iPhone is optional and uses a free-account app slot. Direct AltServer installs require manual re-signing every 7 days.'

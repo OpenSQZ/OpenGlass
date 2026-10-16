@@ -7,11 +7,15 @@ import Darwin
 final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSpeechSynthesizerDelegate {
     private let server = RokidIngressServer()
     private let model = OpenGlassModelSession()
+    // The upstream downloader requires its ObservableObject for file/progress
+    // bookkeeping. Never call initialize() on this download-only wrapper.
+    private lazy var downloadWrapper = MTMDWrapperExample()
     private let speech = OpenGlassSpeechSession()
     private let synthesizer = AVSpeechSynthesizer()
     private var activeUtterance: AVSpeechUtterance?
     private var isRunning = false
     private var isStarting = false
+    private var isAuthorizingSpeech = false
     private var isAnswering = false
     private var audioConnected = false
     private var speechPaused = false
@@ -188,7 +192,7 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         note.numberOfLines = 0
         note.font = .preferredFont(forTextStyle: .footnote)
         note.textColor = .secondaryLabel
-        note.text = "Rokid 可通过同一局域网或 Windows 双 USB 中继连接。首次使用请先下载模型。此 App 的模型文件与原 TestFlight App 分开保存。进入后台会停止接收和语音，回到前台后请重新启动。"
+        note.text = "Rokid 可通过同一局域网或 Windows 双 USB 中继连接。首次使用请先下载模型。此 App 的模型文件与原 MiniCPM 示例分开保存。进入后台会停止接收和语音，回到前台后请重新启动。"
         stack.addArrangedSubview(note)
     }
 
@@ -302,7 +306,6 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
             do {
                 try await model.load()
                 guard isRunning, runID == id else { updateControls(); return }
-                isStarting = false
                 statusLabel.text = "等待 Rokid 画面和音频；也可以文字提问。"
                 if voiceSwitch.isOn {
                     let authorized = await OpenGlassSpeechSession.authorize()
@@ -312,6 +315,7 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
                         statusLabel.text = "未获语音识别权限。可用文字提问，或在系统设置中允许。"
                     }
                 }
+                isStarting = false
                 startListeningIfPossible()
             } catch {
                 if runID == id { stopService(message: error.localizedDescription) }
@@ -324,6 +328,7 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
     private func stopService(message: String) {
         isRunning = false
         isStarting = false
+        isAuthorizingSpeech = false
         speechPaused = true
         suppressAnswerSpeech = true
         runID = UUID()
@@ -425,7 +430,7 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
     private var localeIdentifier: String { languageControl.selectedSegmentIndex == 1 ? "en-US" : "zh-CN" }
 
     private func startListeningIfPossible() {
-        guard isRunning, !isStarting, !isAnswering, !model.isBusy, model.isLoaded,
+        guard isRunning, !isStarting, !isAuthorizingSpeech, !isAnswering, !model.isBusy, model.isLoaded,
               !model.requiresAppRestart, voiceSwitch.isOn, !speechPaused,
               audioConnected, activeUtterance == nil, !speech.isActive else { return }
         do {
@@ -440,14 +445,16 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
     @objc private func toggleListening() {
         if speech.isListening { speech.finishUtterance(); updateControls(); return }
         if speech.isFinishing { return }
-        guard isRunning, !model.isBusy, !isAnswering else { return }
+        guard isRunning, !model.isBusy, !isAnswering, !isAuthorizingSpeech else { return }
         voiceSwitch.isOn = true
         UserDefaults.standard.set(true, forKey: "OpenGlass.voiceEnabled")
         speechPaused = false
+        isAuthorizingSpeech = true
         let id = runID
         Task {
             let authorized = await OpenGlassSpeechSession.authorize()
             guard isRunning, runID == id else { return }
+            isAuthorizingSpeech = false
             if authorized {
                 if !audioConnected { statusLabel.text = "等待 Rokid 音频连接…" }
                 startListeningIfPossible()
@@ -589,7 +596,7 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         askButton.isEnabled = isRunning && !isStarting && model.isLoaded && !busy && !model.requiresAppRestart
         listenButton.configuration?.title = speech.isFinishing ? "正在结束语句…" : (speech.isListening ? "结束语句并提问" : "开始语音")
         listenButton.isEnabled = isRunning && !isStarting && !busy && activeUtterance == nil
-            && !model.requiresAppRestart && !speech.isFinishing
+            && !model.requiresAppRestart && !speech.isFinishing && !isAuthorizingSpeech
         stopTurnButton.isEnabled = isRunning || busy || activeUtterance != nil
         downloadItem.isEnabled = !busy && !model.requiresAppRestart
         languageControl.isEnabled = !busy && activeUtterance == nil
@@ -604,7 +611,7 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         Task {
             do {
                 try await model.unload()
-                navigationController?.pushViewController(MBV46ModelDetailViewController(), animated: true)
+                navigationController?.pushViewController(MBV46ModelDetailViewController(with: downloadWrapper), animated: true)
             } catch {
                 statusLabel.text = error.localizedDescription
             }

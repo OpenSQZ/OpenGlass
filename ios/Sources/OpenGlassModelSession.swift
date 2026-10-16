@@ -53,12 +53,30 @@ final class OpenGlassModelSession {
             let files = Self.modelFiles.map { documents.appendingPathComponent($0) }
             for file in files {
                 guard FileManager.default.fileExists(atPath: file.path) else { throw SessionError.missingFiles }
-                // Check only the GGUF header, never hash multi-GB files on the UI thread.
+                // Reject obvious truncation before doing full artifact validation.
                 let handle = try FileHandle(forReadingFrom: file)
                 let header = try handle.read(upToCount: 4)
                 try handle.close()
                 guard header == Data("GGUF".utf8) else { throw SessionError.invalidFile(file.lastPathComponent) }
             }
+            // The upstream download UI reports completion before its background
+            // checksum finishes. A GGUF header/filename alone cannot prove that
+            // these are the matching 4.6 LLM and projector. Reuse its cached
+            // validation receipts, and keep first-time hashing off the UI actor.
+            let checksums = [MiniCPMModelConst.modelv46_Q4_K_M_MD5,
+                             MiniCPMModelConst.modelMMProjv46_MD5]
+            transition(.loading, "正在校验 MiniCPM-V 4.6 模型文件…")
+            let invalidFile = await Task.detached(priority: .userInitiated) {
+                for (file, checksum) in zip(files, checksums) {
+                    if !MBModelArtifactStore.validate(file, expectedMD5: checksum) {
+                        return Optional(file.lastPathComponent)
+                    }
+                }
+                return Optional<String>.none
+            }.value
+            if let invalidFile { throw SessionError.invalidFile(invalidFile) }
+            try checkStopped()
+            transition(.loading, "正在加载 MiniCPM-V 4.6…")
             let engine = MTMDWrapper()
             wrapper = engine
             engine.setEnableThinking(false)

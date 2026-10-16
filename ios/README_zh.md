@@ -1,6 +1,6 @@
 # Rokid → iPhone MiniCPM-V 4.6（Windows 开发）
 
-本目录把现有 Rokid 采集协议接入 iPhone，在手机本机运行 MiniCPM-V 4.6。Windows 可以编辑代码、编译眼镜 APK、下载 iOS 构建和协助安装；iOS 编译交给 GitHub Actions 的 macOS/Xcode runner，安装前在 Windows 通过 AltStore Classic / AltServer 用自己的 Apple 账号重新签名。不要求自有 MacBook。
+本目录把现有 Rokid 采集协议接入 iPhone，在手机本机运行 MiniCPM-V 4.6。Windows 可以编辑代码、编译眼镜 APK、下载 iOS 构建和协助安装；iOS 编译交给 GitHub Actions 的 macOS/Xcode runner，安装前在 Windows 通过 AltServer 用自己的 Apple 账号重新签名。首次安装优先使用 AltServer 直接侧载 IPA，无需先在手机安装 AltStore。不要求自有 MacBook。
 
 这是开发版本。源码、构建成功、签名安装成功、真实眼镜音视频到达、手机模型回答成功是不同的验证阶段；下方命令不会把“USB 已识别”当成端到端成功。
 
@@ -73,17 +73,27 @@ Python 命令未安装或打开 Microsoft Store 时，先安装真正的 Python�
   -RunId 123456789
 ```
 
-`RunId` 是 Actions 运行 URL 的数值 ID，不是 artifact 后缀的运行编号；示例值必须替换。脚本核验工作流、成功状态和未过期产物，输出源提交与 IPA SHA-256；目标目录存在时退出，避免覆盖旧产物。GitHub CLI 未登录时，由本人先运行 `gh auth login`。
+`RunId` 是 Actions 运行 URL 的数值 ID，不是 artifact 后缀的运行编号；示例值必须替换。脚本核验工作流、成功状态和未过期产物，再检查 `build-info.json` 的源提交与该运行一致、`signed=false`、bundle ID正确，以及 IPA中存在且可读取 `Payload/OpenGlass.app/Info.plist`。它不把IPA中的任意路径解压到磁盘，并输出源提交与 IPA SHA-256；目标目录存在时退出，避免覆盖旧产物。GitHub CLI 未登录时，由本人先运行 `gh auth login`。
 
 ## 3. 用免费 Apple 账号签名安装
 
 CI 产物不能直接作为已签名 App 安装。`ideviceinstaller`、`pymobiledevice3 apps install` 和 USB 端口转发都不会把 unsigned IPA 变成可运行的签名 App。
 
-按 [官方安装流程](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows)，从 Windows 托盘 AltServer 安装 AltStore Classic 到已解锁的 iPhone，并本人完成账号验证。再把 `OpenGlass-1.0.ipa` 保存到 iPhone 的“文件”App，在 AltStore 的 **My Apps → +** 选择该 IPA，保持 AltServer 可连接，完成签名安装。使用自己选择的文件传输方式；无需把模型权重或私人数据上传到公开链接。
+**首装推荐：从 Windows AltServer 直接侧载。** 如果手机已经有旧 OpenGlass 和自己编译的 MiniCPM，先装 AltStore 可能占用第三个免费侧载名额，使新 OpenGlass 成为第四个而无法安装。直接侧载无需增加 AltStore 这个手机 App：
+
+1. 保持 iPhone 通过 USB 连接、解锁并已信任电脑；确认 Apple Mobile Device Service 可用。Windows能看到iPhone图标或iTunes已安装，不等于该服务已准备好。
+2. 启动 Windows 的 **AltServer**，找到任务栏右下角托盘里的图标。
+3. **按住 Shift，再点击 AltServer 托盘图标**，选择 **Sideload .ipa…**，并选择目标 iPhone（界面有设备子菜单时）。
+4. 在 Windows 文件选择框选中构建下载得到的 **OpenGlass-1.0.ipa**。
+5. 本人在 AltServer 界面输入自己的 Apple 账号并完成验证，等待签名和安装结果；随后在 iPhone 按提示信任签名配置、确认开发者模式，再打开新 App。
+
+这条 Windows 直接侧载入口及其无需预装 AltStore 的行为见 [AltServer 官方发布说明的 Direct .ipa Sideloading](https://faq.altstore.io/release-notes/altserver)。保留下载的 IPA；免费签名需要每 7 天用同一账号、同一 IPA 的上述步骤重新签名安装。此路径没有 AltStore 的自动刷新，不需要先把 IPA 转到手机“文件”App。
 
 源 bundle ID 为 `org.opensqz.openglass.ios`；重签工具可能附加账号相关标识。显示名称是 **OpenGlass**。旧手机 App 若由另一账号/Team 签名，不能保证覆盖安装、共享模型文件或保留原数据；先保留旧 App，核对错误提示与签名来源，避免通过卸载来试错。
 
-免费账号需要定期刷新签名，通常 7 天到期，活跃侧载 App 上限为 3 个，AltStore 本身也占名额。使用 AltStore 管理续签；临近到期时连接 Windows 并刷新。官方限制见 [AltStore Classic 开发者说明](https://developer.altstore.io/)及[错误码](https://faq.altstore.io/altstore-classic/error-codes)。如果原 OpenGlass“点不开”，签名过期只是可能原因之一，还应区分未信任、开发者模式、闪退和模型内存问题。
+免费账号的活跃侧载 App 上限为 3 个，AltStore 本身也占名额；直接侧载只是省去 AltStore 的名额，并不会提高上限。若仍提示超限，先核对当前签名/活跃 App 清单，**不要卸载旧 OpenGlass 或 MiniCPM 来试错**。官方限制见 [AltStore Classic 开发者说明](https://developer.altstore.io/)及[错误码](https://faq.altstore.io/altstore-classic/error-codes)。如果原 OpenGlass“点不开”，签名过期只是可能原因之一，还应区分未信任、开发者模式、闪退和模型内存问题。
+
+**后续可选：用 AltStore 管理自动刷新。** 确认有空余名额后，按 [官方安装流程](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows)从 AltServer 安装 AltStore Classic，再把 IPA 保存到 iPhone“文件”App，在 AltStore **My Apps → +** 中安装并管理。直接用 AltServer 安装的 App 不能假定会自动出现在 AltStore 的管理列表；要以 AltStore 里实际显示的 App 和到期时间为准。自动刷新仍依赖可达的 AltServer及系统后台条件，临近到期应主动检查。
 
 ## 4. 在 iPhone 准备模型
 
@@ -92,7 +102,7 @@ CI 产物不能直接作为已签名 App 安装。`ideviceinstaller`、`pymobile
 3. 回到主界面，点“启动接收”，等待模型就绪。初次验证可先关闭“Rokid 离线语音提问”，用文字问题排除语音权限影响。
 4. 保持 OpenGlass 在前台。进入后台会停止接收和语音；返回后需要再次点“启动接收”。本实现不保证锁屏长期运行。
 
-模型文件不能混用 MiniCPM-o 4.5、其他尺寸或未经验证的 GGUF 转换。加载会检查文件存在与 GGUF 头；这不能代替完整模型匹配与真机推理验证。文件名由锁定上游的 MiniCPM-V 4.6 常量决定。
+模型文件不能混用 MiniCPM-o 4.5、其他尺寸或未经验证的 GGUF 转换。加载会检查文件存在、GGUF 头和锁定上游对应的 MD5；首次完整校验在后台进行，后续复用文件大小/修改时间匹配的校验记录。文件名与预期校验值由锁定上游的 MiniCPM-V 4.6 常量决定；模型通过校验仍需真机推理验证。
 
 ## 5A. 双 USB 接入（先验证这条）
 
@@ -165,12 +175,13 @@ iPhone个人热点、眼镜厂商固件对 Wi-Fi/蓝牙共存的影响要另行�
 | 有文本回答但没声音 | “朗读回答”开关、iPhone音量/音频路由、蓝牙配对；看界面实际输出设备 |
 | 语音不可用但文字正常 | 系统语音识别权限与该语言的设备端资源；该功能不向云识别降级 |
 | 切后台后断流 | 预期行为；回前台重启接收与语音 |
-| 免费签名几天后点不开 | 先查AltStore剩余天数并刷新签名；不要先删除App及模型数据 |
+| 免费签名几天后点不开 | 直接侧载方式每7天用AltServer重签；AltStore管理方式查看剩余天数并刷新。不要先删除App及模型数据 |
 
 ## 验证记录
 
 - 本地脚本检查：PowerShell语法解析通过；USB中继使用伪设备测试了端口占用、已有reverse、并发映射冲突、接收端不可达、成功启动与只清理自身映射等情况。
-- 真机状态、CI构建链接、签名安装结果和端到端模型回答需分别记录；不能以以上测试替代真机验证。
+- [CI运行38889523899](https://github.com/OpenSQZ/OpenGlass/actions/runs/38889523899)成功，源提交为 `44d85adb28096af1989fb6f1d89873ca0a567e56`：1399项wire protocol检查、7项工程准备测试、7项USB中继测试通过，并生成未签名的 `OpenGlass-1.0.ipa`。
+- 现场设备识别为 `iPhone18,2`、iOS `26.6.2`，已完成Windows USB配对。新IPA尚未在手机上完成签名安装，也未完成“眼镜采集 → iPhone模型回答”的端到端验证；CI成功和USB配对不能替代这两步。
 - 不在此文档写入个人设备序列号、UDID、Apple账号或内网凭据。现场更新请用设备类型和验证结果描述。
 
 可重复执行无设备测试：
