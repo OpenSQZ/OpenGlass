@@ -1,6 +1,6 @@
 # Rokid → iPhone MiniCPM-V 4.6（Windows 开发）
 
-本目录把现有 Rokid 采集协议接入 iPhone，在手机本机运行 MiniCPM-V 4.6。Windows 可以编辑代码、编译眼镜 APK、下载 iOS 构建和协助安装；iOS 编译交给 GitHub Actions 的 macOS/Xcode runner，安装前在 Windows 通过 AltServer 用自己的 Apple 账号重新签名。首次安装优先使用 AltServer 直接侧载 IPA，无需先在手机安装 AltStore。不要求自有 MacBook。
+本目录把现有 Rokid 采集协议接入 iPhone，在手机本机运行 MiniCPM-V 4.6。Windows 可以编辑代码、编译眼镜 APK、下载 iOS 构建和协助安装；iOS 编译交给 GitHub Actions 的 macOS/Xcode runner，安装前在 Windows 用自己的 Apple 账号重新签名。不要求自有 MacBook。签名工具的常规入口、当前登录问题与本机认证测试版见第 3 节。
 
 这是开发版本。源码、构建成功、签名安装成功、真实眼镜音视频到达、手机模型回答成功是不同的验证阶段；下方命令不会把“USB 已识别”当成端到端成功。
 
@@ -35,7 +35,7 @@ Rokid → HTTP JPEG + WebSocket PCM → iPhone 局域网地址:18080
 3. 按 [AltStore 官方 Windows 安装说明](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows)安装 AltServer 及所要求的 Apple iTunes / iCloud 组件。官方默认流程使用 Apple 直接分发的版本；已安装 Store 版时，先参照官方故障排查，不要随意删除 Apple 驱动或服务。
 4. 在 iPhone 的“隐私与安全性”开启“开发者模式”，按系统要求重启并确认。签名配置的信任按系统提示在“通用 → VPN 与设备管理”中处理。
 
-Apple 账号、密码及验证码只由本人输入 AltServer / AltStore 正规界面，不放入脚本、GitHub Secrets、日志或仓库。这里的自动化不读取 Apple 账号、配对记录或签名证书。
+Apple 账号、密码及验证码只由本人输入所选签名工具的界面，不放入脚本、GitHub Secrets、日志或仓库。安装 iTunes / iCloud 组件与登录它们的云服务是两件事；本机认证测试版使用已安装的 Apple 组件，不要求分别登录 iCloud 和 iTunes。
 
 在仓库根目录创建独立 Python 环境：
 
@@ -79,7 +79,7 @@ Python 命令未安装或打开 Microsoft Store 时，先安装真正的 Python�
 
 CI 产物不能直接作为已签名 App 安装。`ideviceinstaller`、`pymobiledevice3 apps install` 和 USB 端口转发都不会把 unsigned IPA 变成可运行的签名 App。
 
-**首装推荐：从 Windows AltServer 直接侧载。** 如果手机已经有旧 OpenGlass 和自己编译的 MiniCPM，先装 AltStore 可能占用第三个免费侧载名额，使新 OpenGlass 成为第四个而无法安装。直接侧载无需增加 AltStore 这个手机 App：
+**常规入口：从 Windows AltServer 直接侧载。** 本次现场的 AltServer 1.8 在验证码阶段出现 `-22411`，因此以下入口尚未在本机成功完成安装；不要把它视为已验证的解决办法。手机已经有旧 OpenGlass 和自己编译的 MiniCPM 时，先装 AltStore 可能占用第三个免费侧载名额，使新 OpenGlass 成为第四个而无法安装。直接侧载无需增加 AltStore 这个手机 App：
 
 1. 保持 iPhone 通过 USB 连接、解锁并已信任电脑；确认 Apple Mobile Device Service 可用。Windows能看到iPhone图标或iTunes已安装，不等于该服务已准备好。
 2. 启动 Windows 的 **AltServer**，找到任务栏右下角托盘里的图标。
@@ -94,6 +94,17 @@ CI 产物不能直接作为已签名 App 安装。`ideviceinstaller`、`pymobile
 免费账号的活跃侧载 App 上限为 3 个，AltStore 本身也占名额；直接侧载只是省去 AltStore 的名额，并不会提高上限。若仍提示超限，先核对当前签名/活跃 App 清单，**不要卸载旧 OpenGlass 或 MiniCPM 来试错**。官方限制见 [AltStore Classic 开发者说明](https://developer.altstore.io/)及[错误码](https://faq.altstore.io/altstore-classic/error-codes)。如果原 OpenGlass“点不开”，签名过期只是可能原因之一，还应区分未信任、开发者模式、闪退和模型内存问题。
 
 **后续可选：用 AltStore 管理自动刷新。** 确认有空余名额后，按 [官方安装流程](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows)从 AltServer 安装 AltStore Classic，再把 IPA 保存到 iPhone“文件”App，在 AltStore **My Apps → +** 中安装并管理。直接用 AltServer 安装的 App 不能假定会自动出现在 AltStore 的管理列表；要以 AltStore 里实际显示的 App 和到期时间为准。自动刷新仍依赖可达的 AltServer及系统后台条件，临近到期应主动检查。
+
+**本次本地交付：OpenGlass Local Signer 测试版。** Sideloadly 0.70.1 使用 Local Anisette 后可以输入验证码，但本机仍收到 GSA HTTP 503。这个错误本身不能证明密码错误或 TLS 被拦截。为继续只使用本地认证组件，准备了基于 [iloader v2.3.9](https://github.com/nab138/iloader/tree/aa9aa3779e15498180e0205158b7ff91536877c6) 和 isideload 0.4.6 的修改版，保存于本机 `%USERPROFILE%\Downloads\OpenGlass-Local-Signer`。它不是官方 iloader 发布；目录内源码包及 `BUILD_WINDOWS.md` 提供构建输入和说明。
+
+主程序旁必须保留 `local-apple-identity.exe` 与 `local-coreadi-helper.exe`。它们核验已安装 Apple DLL 的固定 SHA256 和签名，通过本机管道取得原生身份及认证数据；没有远程 Anisette 备用服务，不自动擦除或重新注册原生身份。当前构建锁定本机 Apple 组件版本，不保证适用于其他版本的电脑。登录、验证码验证、申请签名证书和描述文件仍需要联网到 Apple；“本地认证”不等于离线签名。
+
+1. 运行 `OpenGlass-Local-Signer.exe`，本人在 Apple ID 区域登录并填写验证码；保存密码默认不勾选。
+2. 选择 USB 连接的 iPhone，点击 **Import IPA**，选择本次构建的 IPA；选中文件后即开始签名安装。
+3. 若提示开发证书已满，先取消并确认哪些旧 App 依赖已有证书；程序不会默认选择全部撤销。
+4. 用手机安装列表核对新 App 的实际 bundle ID、版本和文件共享状态，再导入模型。仅有“账号登录成功”或 Windows 程序已打开不代表 iPhone 安装完成。
+
+测试版已通过 6 项管道协议测试、前后端构建、本机组件调用，以及携带公共客户端描述的 Apple URL-bag GET / TLS 校验。2026-10-16，本人操作后 Apple 账号登录和签名成功；首次安装因已有 3 个免费开发 App 被手机拒绝。用户明确选择卸载旧 OpenGlass 后，复用已签名文件安装新版成功，USB 查询确认版本 `1.0`、build `3`、文件共享可用，MiniCPM 示例与 CyanGlass 均保留。签名工具会给新 bundle ID 追加 Team ID；只改 IPA 的原始 bundle ID 不能假定能覆盖旧 Xcode App。自动更新已关闭，避免被上游的不同认证配置替换。
 
 ## 4. 在 iPhone 准备模型
 
@@ -180,8 +191,8 @@ iPhone个人热点、眼镜厂商固件对 Wi-Fi/蓝牙共存的影响要另行�
 ## 验证记录
 
 - 本地脚本检查：PowerShell语法解析通过；USB中继使用伪设备测试了端口占用、已有reverse、并发映射冲突、接收端不可达、成功启动与只清理自身映射等情况。
-- [CI运行38889523899](https://github.com/OpenSQZ/OpenGlass/actions/runs/38889523899)成功，源提交为 `44d85adb28096af1989fb6f1d89873ca0a567e56`：1399项wire protocol检查、7项工程准备测试、7项USB中继测试通过，并生成未签名的 `OpenGlass-1.0.ipa`。
-- 现场设备识别为 `iPhone18,2`、iOS `26.6.2`，已完成Windows USB配对。新IPA尚未在手机上完成签名安装，也未完成“眼镜采集 → iPhone模型回答”的端到端验证；CI成功和USB配对不能替代这两步。
+- [CI运行38890873970](https://github.com/OpenSQZ/OpenGlass/actions/runs/38890873970)成功，源提交为 `c11c87b39b5798f8b4218d3a47d5b6cc68e56091`：1399项wire protocol检查、7项工程准备测试、7项USB中继测试通过，并生成未签名的 `OpenGlass-1.0.ipa`（artifact `OpenGlass-iOS-unsigned-3`）。IPA SHA256 为 `DA76A28A87195C43EA80ECF11366724180480B5D6502DEA27A4D1AF800AD00DB`。
+- 现场设备识别为 `iPhone18,2`、iOS `26.6.2`，已完成 Windows USB 配对。新版 `1.0` / build `3` 已通过本机认证签名并安装；系统返回安装成功，安装列表再次确认。两个对应 4.6 的模型已校验源文件 MD5 并通过 USB 导入，手机端文件大小一致；首次加载仍由 App 完整校验。眼镜图像、ASR、模型回答与 TTS 的端到端结果仍待真机验证。
 - 不在此文档写入个人设备序列号、UDID、Apple账号或内网凭据。现场更新请用设备类型和验证结果描述。
 
 可重复执行无设备测试：
