@@ -67,7 +67,9 @@ final class OpenGlassSpeechSession {
             Task { @MainActor in
                 guard let self, self.sessionID == id else { return }
                 if let result {
-                    self.latestText = result.bestTranscription.formattedString
+                    let text = result.bestTranscription.formattedString
+                    if !text.isEmpty && text != self.latestText { self.lastVoiceAt = Date() }
+                    self.latestText = text
                     self.onPartial?(self.latestText)
                     if result.isFinal { self.complete(); return }
                 }

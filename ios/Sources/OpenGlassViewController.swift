@@ -188,7 +188,7 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         note.numberOfLines = 0
         note.font = .preferredFont(forTextStyle: .footnote)
         note.textColor = .secondaryLabel
-        note.text = "Rokid 与 iPhone 需在同一可互通网络。首次使用请先下载模型。此 App 的模型文件与原 TestFlight App 分开保存。进入后台会停止接收和语音，回到前台后请重新启动。"
+        note.text = "Rokid 可通过同一局域网或 Windows 双 USB 中继连接。首次使用请先下载模型。此 App 的模型文件与原 TestFlight App 分开保存。进入后台会停止接收和语音，回到前台后请重新启动。"
         stack.addArrangedSubview(note)
     }
 
@@ -229,6 +229,9 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
             self.speech.appendPCM16LE(data)
         }
         server.onStatus = { [weak self] status in self?.connectionLabel.text = status }
+        server.onFailure = { [weak self] message in
+            self?.stopService(message: "接收服务失败：\(message)")
+        }
         server.onAudioConnectionChanged = { [weak self] connected in
             guard let self else { return }
             self.audioConnected = connected
@@ -611,7 +614,7 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
 
     @objc private func refreshAddresses() {
         let addresses = localIPv4Addresses()
-        addressView.text = addresses.isEmpty ? "尚未取得局域网 IPv4 地址，请连接 Wi-Fi 后刷新。"
+        addressView.text = addresses.isEmpty ? "暂无局域网 IPv4 地址。可使用 Windows 双 USB 中继，或连接 Wi-Fi 后刷新。"
             : addresses.map { "http://\($0):18080" }.joined(separator: "\n")
     }
 

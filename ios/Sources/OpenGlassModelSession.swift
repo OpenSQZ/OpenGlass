@@ -32,6 +32,9 @@ final class OpenGlassModelSession {
     private var tokenSubscription: AnyCancellable?
     private var discardResult = false
     private var output = ""
+    // A timed-out worker cannot be joined through the upstream API. Keep its
+    // context alive even if UIKit later discards the view controller.
+    private static var quarantinedContexts: [MTMDWrapper] = []
 
     static var modelFiles: [String] {
         [MiniCPMModelConst.modelv46_FileName, MiniCPMModelConst.mmprojv46_FileName]
@@ -124,6 +127,7 @@ final class OpenGlassModelSession {
                 // The upstream watchdog can return while C++ still uses ctx.
                 // Retain the wrapper, never reset/free or start a second call.
                 requiresAppRestart = true
+                Self.quarantinedContexts.append(engine)
                 transition(.failed, SessionError.restartRequired.localizedDescription)
                 throw SessionError.restartRequired
             }

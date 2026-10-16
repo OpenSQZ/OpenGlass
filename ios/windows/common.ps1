@@ -60,8 +60,25 @@ function Get-OpenGlassRokid {
 
 function Resolve-OpenGlassPython {
     param([string]$Python = 'python')
-    $found = Get-Command $Python -ErrorAction Stop
-    $version = @(& $found.Source -c 'import sys; assert sys.version_info >= (3, 11); print(sys.executable)' 2>&1)
-    if ($LASTEXITCODE -ne 0) { throw 'A working Python 3.11+ is required. Pass -Python <python.exe path>.' }
-    return $found.Source
+    $candidates = @()
+    if ($Python -eq 'python') {
+        $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+        $candidates += Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
+        $candidates += Join-Path $repoRoot 'tmp\ios-tools\Scripts\python.exe'
+        $pathPython = Get-Command python.exe -ErrorAction SilentlyContinue
+        if ($pathPython) { $candidates += $pathPython.Source }
+        $candidates += Join-Path $env:USERPROFILE 'miniconda3\python.exe'
+        $candidates += Join-Path $env:USERPROFILE 'anaconda3\python.exe'
+    } else {
+        $explicit = Get-Command $Python -ErrorAction SilentlyContinue
+        if ($explicit) { $candidates += $explicit.Source }
+    }
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        # Do not launch Windows' Store app-execution alias during a diagnostic.
+        if ($candidate -match '[\\/]Microsoft[\\/]WindowsApps[\\/]' -or
+            -not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        $version = @(& $candidate -c 'import sys; assert sys.version_info >= (3, 11); print(sys.executable)' 2>&1)
+        if ($LASTEXITCODE -eq 0) { return (Resolve-Path -LiteralPath $candidate).Path }
+    }
+    throw 'No working Python 3.11+ found (WindowsApps Store aliases are skipped). Pass -Python C:\path\to\python.exe, then install ios/windows/requirements.txt into that environment.'
 }

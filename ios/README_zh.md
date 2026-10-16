@@ -1,0 +1,180 @@
+# Rokid → iPhone MiniCPM-V 4.6（Windows 开发）
+
+本目录把现有 Rokid 采集协议接入 iPhone，在手机本机运行 MiniCPM-V 4.6。Windows 可以编辑代码、编译眼镜 APK、下载 iOS 构建和协助安装；iOS 编译交给 GitHub Actions 的 macOS/Xcode runner，安装前在 Windows 通过 AltStore Classic / AltServer 用自己的 Apple 账号重新签名。不要求自有 MacBook。
+
+这是开发版本。源码、构建成功、签名安装成功、真实眼镜音视频到达、手机模型回答成功是不同的验证阶段；下方命令不会把“USB 已识别”当成端到端成功。
+
+## 运行路径
+
+先使用双 USB 路径，眼镜 Wi-Fi 可以保持关闭：
+
+```text
+Rokid 摄像头 / 麦克风
+  → 眼镜 OpenGlassRokidSensor 0.1.3
+  → adb reverse（眼镜 USB）
+  → Windows 127.0.0.1:18080
+  → pymobiledevice3 usbmux（iPhone USB）
+  → iPhone OpenGlass :18080
+  → MiniCPM-V 4.6 本机视觉推理 → 系统语音播报
+```
+
+Windows 在这个路径只转发数据，不运行视觉模型。拔掉任一 USB 线会中断此路径。确认双 USB 稳定后，可用同一 Wi-Fi 下的直接连接，去掉 Windows 数据中继：
+
+```text
+Rokid → HTTP JPEG + WebSocket PCM → iPhone 局域网地址:18080
+```
+
+两条路径都要求眼镜本身支持 Android APK、Camera/Mic 权限和 ADB。不能仅根据“Rokid”品牌判断所有型号兼容。原采集 APK 无需改协议；当前采样是 JPEG 约 1 fps、16 kHz 单声道 PCM16LE。模型按问题读取最新画面，不是对每个视频帧连续推理。
+
+## 1. 准备 Windows 与手机
+
+需要 Android Platform Tools、Python 3.11+、Git；从 Actions 下载产物的脚本还需要 GitHub CLI。Android 采集 APK 已安装时，无需重新编译；需要编译时沿用仓库的 `rokid_app/build_install.cmd`，另备 JDK 17 和 Android SDK。
+
+1. 将眼镜和 iPhone 都用支持数据传输的 USB 线连接 Windows。
+2. iPhone 解锁，手动同意“信任此电脑”；眼镜确认 USB 调试授权。
+3. 按 [AltStore 官方 Windows 安装说明](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows)安装 AltServer 及所要求的 Apple iTunes / iCloud 组件。官方默认流程使用 Apple 直接分发的版本；已安装 Store 版时，先参照官方故障排查，不要随意删除 Apple 驱动或服务。
+4. 在 iPhone 的“隐私与安全性”开启“开发者模式”，按系统要求重启并确认。签名配置的信任按系统提示在“通用 → VPN 与设备管理”中处理。
+
+Apple 账号、密码及验证码只由本人输入 AltServer / AltStore 正规界面，不放入脚本、GitHub Secrets、日志或仓库。这里的自动化不读取 Apple 账号、配对记录或签名证书。
+
+在仓库根目录创建独立 Python 环境：
+
+```powershell
+python -m venv .\ios\windows\.venv
+.\ios\windows\.venv\Scripts\python.exe -m pip install -r .\ios\windows\requirements.txt
+```
+
+Python 命令未安装或打开 Microsoft Store 时，先安装真正的 Python，或者用其完整 `python.exe` 路径替换命令。
+
+运行只读诊断：
+
+```powershell
+.\ios\windows\diagnose.ps1 `
+  -Adb "$env:USERPROFILE\Downloads\platform-tools\adb.exe" `
+  -Python .\ios\windows\.venv\Scripts\python.exe
+```
+
+若有多个 Android 设备，在命令后加 `-Serial '<adb devices -l 中的眼镜序列号>'`。若同时安装 debug/release 两个采集 App，加 `-Package 'org.opensqz.openglass.rokid.debug'` 或实际已安装的 release 包。脚本会核验真实安装包、0.1.3 版本和 launcher Activity，不默认猜包名。分享诊断输出前删除设备序列号/UDID。
+
+## 2. 获取 iOS IPA
+
+构建锁定 [MiniCPM-V-Apps](https://github.com/OpenBMB/MiniCPM-V-Apps) 与其 llama.cpp-omni 子模块的具体提交，见 `upstream-lock.json`；模型下载页沿用上游 MiniCPM-V 4.6 页面。iOS 工程由 `scripts/prepare_upstream.py` 在构建目录生成，不覆盖旧 Mac 上的项目。
+
+在包含当前分支的 GitHub 仓库里打开 **Actions → Build OpenGlass iOS IPA**，选择该分支运行。工作流是 `.github/workflows/ios-ipa.yml`；首次编译原生推理框架会较慢。等待实际显示成功，再下载名为 `OpenGlass-iOS-unsigned-<运行编号>` 的 artifact，解压得到：
+
+- `OpenGlass-1.0.ipa`：未签名的真机 arm64 App。
+- `build-info.json`：构建来源信息。
+
+也可在 Windows 用指定仓库和运行 ID 下载：
+
+```powershell
+.\ios\windows\download-artifact.ps1 `
+  -Repository '你的GitHub用户名/OpenGlass' `
+  -RunId 123456789
+```
+
+`RunId` 是 Actions 运行 URL 的数值 ID，不是 artifact 后缀的运行编号；示例值必须替换。脚本核验工作流、成功状态和未过期产物，输出源提交与 IPA SHA-256；目标目录存在时退出，避免覆盖旧产物。GitHub CLI 未登录时，由本人先运行 `gh auth login`。
+
+## 3. 用免费 Apple 账号签名安装
+
+CI 产物不能直接作为已签名 App 安装。`ideviceinstaller`、`pymobiledevice3 apps install` 和 USB 端口转发都不会把 unsigned IPA 变成可运行的签名 App。
+
+按 [官方安装流程](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows)，从 Windows 托盘 AltServer 安装 AltStore Classic 到已解锁的 iPhone，并本人完成账号验证。再把 `OpenGlass-1.0.ipa` 保存到 iPhone 的“文件”App，在 AltStore 的 **My Apps → +** 选择该 IPA，保持 AltServer 可连接，完成签名安装。使用自己选择的文件传输方式；无需把模型权重或私人数据上传到公开链接。
+
+源 bundle ID 为 `org.opensqz.openglass.ios`；重签工具可能附加账号相关标识。显示名称是 **OpenGlass**。旧手机 App 若由另一账号/Team 签名，不能保证覆盖安装、共享模型文件或保留原数据；先保留旧 App，核对错误提示与签名来源，避免通过卸载来试错。
+
+免费账号需要定期刷新签名，通常 7 天到期，活跃侧载 App 上限为 3 个，AltStore 本身也占名额。使用 AltStore 管理续签；临近到期时连接 Windows 并刷新。官方限制见 [AltStore Classic 开发者说明](https://developer.altstore.io/)及[错误码](https://faq.altstore.io/altstore-classic/error-codes)。如果原 OpenGlass“点不开”，签名过期只是可能原因之一，还应区分未信任、开发者模式、闪退和模型内存问题。
+
+## 4. 在 iPhone 准备模型
+
+1. 打开新 **OpenGlass**，进入右上角“模型下载”。
+2. 在 MiniCPM-V 4.6 下载页完成 **LLM 与 VPM 两个 GGUF 文件**。这个 App 有独立沙盒；其他 TestFlight/App 已下载的模型不会自动出现在这里。下载与首次资源准备需要网络。
+3. 回到主界面，点“启动接收”，等待模型就绪。初次验证可先关闭“Rokid 离线语音提问”，用文字问题排除语音权限影响。
+4. 保持 OpenGlass 在前台。进入后台会停止接收和语音；返回后需要再次点“启动接收”。本实现不保证锁屏长期运行。
+
+模型文件不能混用 MiniCPM-o 4.5、其他尺寸或未经验证的 GGUF 转换。加载会检查文件存在与 GGUF 头；这不能代替完整模型匹配与真机推理验证。文件名由锁定上游的 MiniCPM-V 4.6 常量决定。
+
+## 5A. 双 USB 接入（先验证这条）
+
+确认 iPhone 已启动接收后，在 Windows 仓库根运行：
+
+```powershell
+.\ios\windows\start-usb-relay.ps1 `
+  -Adb "$env:USERPROFILE\Downloads\platform-tools\adb.exe" `
+  -Python .\ios\windows\.venv\Scripts\python.exe
+```
+
+仅连接一副授权眼镜和一台 iPhone 时自动选择；多设备时显式加 `-Serial '<眼镜USB序列号>'`、`-IPhoneUdid '<iPhone UDID>'`。用下列只读命令查询 iPhone USB UDID：
+
+```powershell
+.\ios\windows\.venv\Scripts\python.exe -m pymobiledevice3 usbmux list --usb --simple
+```
+
+脚本先检查既有 ADB reverse 映射，随后在 Windows `127.0.0.1` 绑定端口，通过 iPhone USB 查询 `/health` 并核验 `service: openglass-ios`；通过后才建立独占反向映射并启动眼镜采集 App。App 无需 Wi-Fi 地址，实际保存的采集目标是眼镜自己的 `http://127.0.0.1:18080`。
+
+Windows 原 Python 面板占用了 18080 时，先在该面板正常停止；也可以为本次中继换 Windows 端口，不改变 iPhone 监听端口：
+
+```powershell
+.\ios\windows\start-usb-relay.ps1 `
+  -Python .\ios\windows\.venv\Scripts\python.exe -LocalPort 18081
+```
+
+如果眼镜18080已有其他会话的 reverse 映射，脚本会退出，不抢占。可结束原会话，或显式加 `-RokidPort 18081`；脚本会同步传入正确采集 URL。不要同时启动旧电脑面板去重配同一眼镜。
+
+运行期间另开终端查看手机接收计数（修改了 `LocalPort` 就使用对应端口）：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:18080/health
+```
+
+`image_count`、`audio_packets_in` 应随采集增长。主终端按 **Ctrl+C** 正常停止，会关闭本次转发器，并移除本次创建、且未被其他会话改变的 reverse 映射。不会杀死所有 Python/ADB 进程，不会卸载 App。眼镜采集 App 可能继续重连，必要时在眼镜界面手动停止。
+
+底层使用官方 [pymobiledevice3 v11.32.0 TCP forwarder](https://github.com/doronz88/pymobiledevice3/blob/v11.32.0/pymobiledevice3/tcp_forwarder.py)，限定 USB。其 CLI 对应 `usbmux forward <Windows端口> <iPhone端口>`，这里的包装脚本另外处理设备选择、健康检查和清理。普通 App TCP 转发不使用 iOS 开发调试隧道，不要求将 Apple 配对文件上传到任何服务。
+
+## 5B. Wi-Fi 直连（USB 路径通过后）
+
+在官方 Rokid AI App/设备设置中先把眼镜和 iPhone 放到同一可互通 Wi-Fi。确认网络没有客户端隔离。在 iPhone OpenGlass 点“刷新地址”，取其显示的局域网 IPv4 地址。眼镜暂时保留 USB，仅用于设置采集地址：
+
+```powershell
+.\ios\windows\configure-rokid.ps1 `
+  -IPhoneAddress '192.168.1.42' `
+  -Adb "$env:USERPROFILE\Downloads\platform-tools\adb.exe"
+```
+
+替换示例 IP。此脚本不替你打开/修改眼镜 Wi-Fi，只检测手机接收服务并重启眼镜采集 App。确认画面/音频计数增长后再拔掉眼镜 USB。此时即使 Windows 关闭，中间没有 Windows 转发；iPhone 仍需前台运行。
+
+iPhone个人热点、眼镜厂商固件对 Wi-Fi/蓝牙共存的影响要另行真机验证，不能将同一 Wi-Fi 成功等同于热点成功。换网或手机 IP 改变后重跑地址配置。若 Windows 暂时不能访问手机但眼镜实际可达，只有明确理解原因时才用 `-SkipReceiverCheck`；它会跳过启动前的手机健康检查。
+
+## 6. 验证对话和音频
+
+先确认预览方向正确；主界面可选0/90/180/270°旋转，默认270°沿用原电脑路径。输入“我面前有什么？”后点“用最新画面提问”，验证手机能读到当前眼镜画面并生成回答。
+
+然后启用“Rokid 离线语音提问”，选择中文或英文，允许系统语音识别权限。输入仍来自眼镜的 PCM 流，App不打开 iPhone 麦克风。Apple 设备端识别资源可用时执行离线识别；不可用会显示错误并保留文字提问，不偷偷改走云端。说完停顿或点“结束语句”后，识别文本与当前图片送给 MiniCPM-V 4.6。回答由系统 TTS 朗读；可在 iPhone 控制中心选择已配对的眼镜作为声音输出，前提是该型号支持相应蓝牙音频功能。
+
+当前是“听问题 → 看图推理 → 朗读回答”的分轮交互；推理/播报时暂停送入识别的麦克风片段，避免回答被自己重新听见。它不提供 MiniCPM-o 的原生全双工音频模型，也不承诺打断播报时继续实时看图。
+
+## 排障
+
+| 现象 | 先检查 |
+| --- | --- |
+| Windows看得到iPhone，usbmux列表为空/报错 | 数据线、手机解锁与信任、Apple Mobile Device Service；PnP识别不等于配对完成 |
+| USB中继提示手机 `/health` 不可达 | 新App是否成功签名安装并已启动接收；是否进入后台；模型加载失败是否导致接收停止 |
+| 端口或ADB reverse已存在 | 在原会话中正常停止，或指定其他本机/眼镜端口；脚本不会杀进程抢占 |
+| `/health` 成功但计数不增长 | 眼镜相机/麦克风权限、采集App版本、ADB授权、所选设备；Wi-Fi模式另查网络互通 |
+| 画面到达但模型未就绪 | 两个正确的4.6模型是否下载完成、磁盘空间、模型加载报错；其他App模型沙盒不共享 |
+| 有文本回答但没声音 | “朗读回答”开关、iPhone音量/音频路由、蓝牙配对；看界面实际输出设备 |
+| 语音不可用但文字正常 | 系统语音识别权限与该语言的设备端资源；该功能不向云识别降级 |
+| 切后台后断流 | 预期行为；回前台重启接收与语音 |
+| 免费签名几天后点不开 | 先查AltStore剩余天数并刷新签名；不要先删除App及模型数据 |
+
+## 验证记录
+
+- 本地脚本检查：PowerShell语法解析通过；USB中继使用伪设备测试了端口占用、已有reverse、并发映射冲突、接收端不可达、成功启动与只清理自身映射等情况。
+- 真机状态、CI构建链接、签名安装结果和端到端模型回答需分别记录；不能以以上测试替代真机验证。
+- 不在此文档写入个人设备序列号、UDID、Apple账号或内网凭据。现场更新请用设备类型和验证结果描述。
+
+可重复执行无设备测试：
+
+```powershell
+python -m unittest discover -s .\ios\windows -p test_usb_relay.py -v
+```

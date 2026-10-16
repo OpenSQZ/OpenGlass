@@ -7,6 +7,7 @@ final class RokidIngressServer {
     var onImage: ((Data) -> Void)?
     var onAudio: ((Data) -> Void)?
     var onStatus: ((String) -> Void)?
+    var onFailure: ((String) -> Void)?
     var onAudioConnectionChanged: ((Bool) -> Void)?
 
     private let queue = DispatchQueue(label: "org.opensqz.rokid.ingress")
@@ -16,8 +17,15 @@ final class RokidIngressServer {
     private var imageCount = 0
     private var audioPacketCount = 0
     private var epoch = UUID()
+    // Read/written only on queue. epoch belongs to the main queue and only
+    // filters UI callbacks; this also prevents an old listener accepting work.
+    private var servingGeneration: UUID?
+    private var imageDeliveryInFlight = false
+    private var pendingAudioBytes = 0
+    private let maximumPendingAudioBytes = 64_000 // Two seconds at 16 kHz PCM16.
 
     func start(port: UInt16 = 18080) throws {
+        dispatchPrecondition(condition: .onQueue(.main))
         guard port > 0 else { throw RokidWireError.invalid("Invalid listen port") }
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
@@ -26,18 +34,26 @@ final class RokidIngressServer {
         let generation = UUID()
         epoch = generation
         listener = newListener
+        queue.sync { servingGeneration = generation }
         newListener.stateUpdateHandler = { [weak self, weak newListener] state in
             guard let self else { return }
             switch state {
             case .ready: self.deliver(generation) { $0.onStatus?("正在接收 Rokid，端口 \(port)") }
             case .failed(let error):
-                self.deliver(generation) { $0.onStatus?("接收服务失败：\(error.localizedDescription)") }
+                self.deliver(generation) {
+                    let message = "接收服务失败：\(error.localizedDescription)"
+                    $0.onStatus?(message)
+                    $0.onFailure?(message)
+                }
                 newListener?.cancel()
             default: break
             }
         }
         newListener.newConnectionHandler = { [weak self] connection in
-            guard let self, self.clients.count < 6 else { connection.cancel(); return }
+            guard let self, self.servingGeneration == generation, self.clients.count < 6 else {
+                connection.cancel()
+                return
+            }
             let client = RokidIngressConnection(connection: connection, queue: self.queue)
             self.clients[client.id] = client
             client.healthJSON = { [weak self] in
@@ -45,8 +61,15 @@ final class RokidIngressServer {
                 return "{\"service\":\"openglass-ios\",\"protocol\":1,\"image_count\":\(self.imageCount),\"audio_packets_in\":\(self.audioPacketCount),\"audio_connected\":\(self.audioClient != nil)}"
             }
             client.onImage = { [weak self] data in
-                self?.imageCount += 1
-                self?.deliver(generation) { $0.onImage?(data) }
+                guard let self else { return }
+                self.imageCount += 1
+                // A busy UI must not retain an unbounded queue of full JPEGs.
+                guard !self.imageDeliveryInFlight else { return }
+                self.imageDeliveryInFlight = true
+                self.deliver(generation, completionOnQueue: { [weak self] in
+                    guard let self, self.servingGeneration == generation else { return }
+                    self.imageDeliveryInFlight = false
+                }) { $0.onImage?(data) }
             }
             client.onAudioOpen = { [weak self, weak client] in
                 guard let self, let client else { return }
@@ -58,8 +81,19 @@ final class RokidIngressServer {
             }
             client.onAudio = { [weak self, weak client] data in
                 guard let self, let client, self.audioClient == client.id else { return }
+                guard self.pendingAudioBytes + data.count <= self.maximumPendingAudioBytes else {
+                    // End the stream explicitly instead of silently introducing
+                    // holes in a recognition request while the UI is blocked.
+                    client.close()
+                    self.deliver(generation) { $0.onStatus?("音频处理未及时跟上，正在等待 Rokid 重连。") }
+                    return
+                }
                 self.audioPacketCount += 1
-                self.deliver(generation) { $0.onAudio?(data) }
+                self.pendingAudioBytes += data.count
+                self.deliver(generation, completionOnQueue: { [weak self] in
+                    guard let self, self.servingGeneration == generation else { return }
+                    self.pendingAudioBytes -= data.count
+                }) { $0.onAudio?(data) }
             }
             client.onClosed = { [weak self, weak client] in
                 guard let self, let client else { return }
@@ -75,24 +109,30 @@ final class RokidIngressServer {
     }
 
     func stop() {
+        dispatchPrecondition(condition: .onQueue(.main))
         epoch = UUID()
         listener?.cancel()
         listener = nil
         queue.sync {
+            servingGeneration = nil
             let closing = Array(clients.values)
             clients.removeAll()
             audioClient = nil
             imageCount = 0
             audioPacketCount = 0
+            imageDeliveryInFlight = false
+            pendingAudioBytes = 0
             closing.forEach { $0.close() }
         }
         onAudioConnectionChanged?(false)
     }
 
-    private func deliver(_ generation: UUID, _ callback: @escaping (RokidIngressServer) -> Void) {
+    private func deliver(_ generation: UUID, completionOnQueue: (() -> Void)? = nil,
+                         _ callback: @escaping (RokidIngressServer) -> Void) {
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.epoch == generation else { return }
-            callback(self)
+            guard let self else { return }
+            if self.epoch == generation { callback(self) }
+            if let completionOnQueue { self.queue.async(execute: completionOnQueue) }
         }
     }
 }
