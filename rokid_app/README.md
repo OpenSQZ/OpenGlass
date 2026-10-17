@@ -2,7 +2,7 @@
 
 [中文说明](README_zh.md)
 
-This directory contains OpenGlass Rokid sensor app 0.2.0 (version code 6). It captures JPEG/PCM and can connect directly to OpenGlass on iPhone over Wi-Fi. The existing PC panel and explicit USB relay modes remain available.
+This directory contains OpenGlass Rokid sensor app 0.2.0 (version code 7). It captures JPEG/PCM and can connect directly to OpenGlass on iPhone over Wi-Fi. The existing PC panel and explicit USB relay modes remain available.
 
 ## Companion setup
 
@@ -41,7 +41,9 @@ Auto mode never falls back to USB, and ignores loopback addresses saved by older
 
 The default display is one dim, centered status line on black: connected, connecting, or paused. Text changes only with connection state; counters, addresses, and scrolling diagnostics stay off the display. Diagnostics remain available in logcat. Connected means the audio connection is established, not that iPhone ASR is currently ready.
 
-**Long-press the display or press Menu** to open connection settings: Auto, Manual address, USB relay, and Choose phone again. Manual accepts `http://<address>:18080`; USB selects `http://127.0.0.1:18080` and requires the existing computer USB relay. Choose phone again forgets the remembered receiver. Tap the display or press Enter/DPAD to stop/start; Back stops, then exits.
+**Long-press the display or press Menu** to open settings: Auto, Manual address, USB relay, Choose phone again, and an explicit Pause/Resume capture item. Use **关闭 (Close)** or Back to dismiss the settings dialog. Manual accepts `http://<address>:18080`; USB selects `http://127.0.0.1:18080` and requires the existing computer USB relay. Choose phone again forgets the remembered receiver. A tap or Enter/DPAD resumes paused capture and does nothing while capture is running, so a casual touch cannot stop the stream. Holding Enter/DPAD does not open the menu. To pause, choose Pause capture from the menu. Back on the main screen still stops, then exits. The full-screen status view disables Android's default focus highlight, and the opaque window and system-bar backgrounds are black.
+
+On Android 10+, the audio diagnostic log includes `silenced=true/false/unknown` from this recorder's active configuration. `unknown` means unavailable, not “not silenced.” When the system reports `true`, the single-line display says `系统提示麦克风静音` (system reports microphone silencing). This observation does not change recording parameters or audio routing; a low RMS alone is not treated as proof of system silencing.
 
 Launch intents remain compatible: an explicit `pc_base_url` fixes the endpoint for that launch and persists the URL as a future fallback. `auto_discover=true` explicitly selects Auto and overrides the old saved USB address. The connection-settings mode persists, while an intent URL alone does not turn a future launcher start into USB mode.
 

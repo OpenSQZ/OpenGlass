@@ -11,6 +11,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
+import android.graphics.drawable.ColorDrawable
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
@@ -21,6 +22,7 @@ import android.media.AudioRecord
 import android.media.ImageReader
 import android.media.MediaRecorder
 import android.os.Bundle
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -35,7 +37,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.TextView
-import android.widget.Button
 import android.widget.EditText
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
@@ -113,6 +114,7 @@ class MainActivity : Activity() {
     @Volatile private var audioSourceText = "none"
     @Volatile private var cameraStatus = "idle"
     @Volatile private var audioStatus = "idle"
+    @Volatile private var microphoneSilenced: Boolean? = null
     @Volatile private var imageSizeText = "none"
     @Volatile private var audioWsUrlText = "none"
     @Volatile private var imagePostBaseText = "none"
@@ -153,12 +155,20 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         configurePcAddress()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Keep every layer opaque black, including the window before the HUD is drawn.
+        window.setBackgroundDrawable(ColorDrawable(Color.BLACK))
+        window.decorView.setBackgroundColor(Color.BLACK)
+        window.statusBarColor = Color.BLACK
+        window.navigationBarColor = Color.BLACK
         window.decorView.systemUiVisibility =
             View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
 
         hud = TextView(this).apply {
             setBackgroundColor(Color.BLACK)
+            // The full-screen clickable TextView receives D-pad focus. The platform's
+            // default focus highlight otherwise paints a grey rectangle over its black background.
+            defaultFocusHighlightEnabled = false
             setTextColor(Color.rgb(140, 140, 140))
             textSize = 20f
             typeface = android.graphics.Typeface.DEFAULT
@@ -168,7 +178,7 @@ class MainActivity : Activity() {
             val inset = (24 * resources.displayMetrics.density).toInt()
             setPadding(inset, 0, inset, 0)
         }
-        hud.setOnClickListener { toggleStartStop() }
+        hud.setOnClickListener { resumeCapture() }
         hud.setOnLongClickListener { showConnectionSettings(); true }
         setContentView(hud, ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
@@ -224,7 +234,8 @@ class MainActivity : Activity() {
     private fun showConnectionSettings() {
         val prefs = getSharedPreferences("pc_connection", Context.MODE_PRIVATE)
         AlertDialog.Builder(this).setTitle("OpenGlass connection")
-            .setItems(arrayOf("Auto: iPhone hotspot / Wi-Fi", "Manual address", "USB relay", "Choose phone again")) { _, which ->
+            .setItems(arrayOf("Auto: iPhone hotspot / Wi-Fi", "Manual address", "USB relay", "Choose phone again",
+                if (running) "Pause capture / 暂停采集" else "Resume capture / 恢复采集")) { _, which ->
                 fun applyMode(mode: String, url: String?) {
                     prefs.edit().putString("connection_mode", mode).apply()
                     explicitUrl = url
@@ -257,8 +268,14 @@ class MainActivity : Activity() {
                         prefs.edit().remove("iphone_service_name").apply()
                         applyMode("auto", null)
                     }
+                    4 -> {
+                        if (running) {
+                            userStopped = true
+                            stopAll()
+                        } else resumeCapture()
+                    }
                 }
-            }.show()
+            }.setNegativeButton("关闭", null).show()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -288,13 +305,14 @@ class MainActivity : Activity() {
             TAG,
             "key action=${event.action} code=${event.keyCode} name=${KeyEvent.keyCodeToString(event.keyCode)}",
         )
+        if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER) {
+            // Consume DOWN as well: forwarding it to the focused full-screen TextView can
+            // arm its long-click timer and unexpectedly open settings while a key is held.
+            if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) resumeCapture()
+            return true
+        }
         if (event.action == KeyEvent.ACTION_UP) {
             when (event.keyCode) {
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                    if (currentFocus is Button) return super.dispatchKeyEvent(event)
-                    toggleStartStop()
-                    return true
-                }
                 KeyEvent.KEYCODE_BACK -> {
                     if (running) {
                         userStopped = true
@@ -312,14 +330,16 @@ class MainActivity : Activity() {
         checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-    private fun toggleStartStop() {
-        userStopped = running
-        if (running) stopAll() else startAll()
+    private fun resumeCapture() {
+        if (running) return
+        userStopped = false
+        if (hasPermissions()) startAll()
     }
 
     private fun startAll() {
         if (running) return
         running = true
+        microphoneSilenced = null
         captureGeneration.incrementAndGet()
         startMs = System.currentTimeMillis()
         lastError = "none"
@@ -346,6 +366,7 @@ class MainActivity : Activity() {
     private fun stopAll() {
         if (!running) return
         running = false
+        microphoneSilenced = null
         captureGeneration.incrementAndGet()
         cameraRestartPending.set(false)
         Log.i(TAG, "stopAll")
@@ -468,9 +489,15 @@ class MainActivity : Activity() {
                     }
                     val now = System.currentTimeMillis()
                     if (now - lastLog >= 1_000L) {
+                        // Observe this recorder only. An unavailable configuration stays unknown;
+                        // this diagnostic does not alter the audio source, routing or samples.
+                        val silenced = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            runCatching { recorder.activeRecordingConfiguration?.isClientSilenced }.getOrNull()
+                        } else null
+                        if (token == captureGeneration.get()) microphoneSilenced = silenced
                         Log.i(
                             TAG,
-                            "audio source=$audioSourceText pkt=${audioPackets.get()} drop=${audioDrops.get()} rms=${fmt(lastRms)} peak=$lastPeak nonzero=$lastNonZero wsOpen=$wsOpen",
+                            "audio source=$audioSourceText pkt=${audioPackets.get()} drop=${audioDrops.get()} rms=${fmt(lastRms)} peak=$lastPeak nonzero=$lastNonZero wsOpen=$wsOpen silenced=${silenced?.toString() ?: "unknown"}",
                         )
                         lastLog = now
                     }
@@ -484,7 +511,10 @@ class MainActivity : Activity() {
                 } catch (_: Throwable) {
                 }
                 recorder.release()
-                if (activeRecorder === recorder) activeRecorder = null
+                if (activeRecorder === recorder) {
+                    activeRecorder = null
+                    microphoneSilenced = null
+                }
                 Log.i(TAG, "AudioRecord stopped")
             }
         }, "rokid-audio").also { it.start() }
@@ -1119,6 +1149,7 @@ class MainActivity : Activity() {
         val status = when {
             !hasPermissions() -> "请允许相机和麦克风"
             !running -> "OpenGlass · 已暂停"
+            microphoneSilenced == true -> "系统提示麦克风静音"
             currentEndpoint == null || !wsOpen -> "OpenGlass · 连接中"
             else -> "OpenGlass · 已连接"
         }

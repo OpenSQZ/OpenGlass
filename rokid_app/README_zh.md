@@ -1,6 +1,6 @@
 # Rokid 采集 App
 
-此目录保存 OpenGlass Rokid 采集 App 0.2.0（versionCode 6）：发送 JPEG 与 PCM 音频，可通过 Wi-Fi 直接连接 iPhone OpenGlass，也保留电脑面板和显式 USB 中继模式。它不是眼镜系统固件。
+此目录保存 OpenGlass Rokid 采集 App 0.2.0（versionCode 7）：发送 JPEG 与 PCM 音频，可通过 Wi-Fi 直接连接 iPhone OpenGlass，也保留电脑面板和显式 USB 中继模式。它不是眼镜系统固件。
 
 ## 文件布局
 
@@ -56,7 +56,9 @@ adb -s <USB_SERIAL> install -r .\app\build\outputs\apk\wifi\app-wifi.apk
 
 眼镜主界面采用黑底、较暗的居中单行提示：`OpenGlass · 已连接`、`OpenGlass · 连接中` 或 `OpenGlass · 已暂停`。只在状态变化时更新，不显示计数、地址或滚动调试文字；诊断信息仍可从 logcat 查看。“已连接”表示音频连接已建立，不代表 iPhone 此刻已准备好识别。
 
-**长按界面或按 Menu** 打开连接设置，提供 Auto、Manual address、USB relay、Choose phone again。手动地址格式为 `http://<地址>:18080`；USB 模式使用 `http://127.0.0.1:18080`，仍需要电脑上的既有 USB 中继。Choose phone again 会忘记已选择的手机。短按界面或 Enter/DPAD 可启停；Back 先停止，再退出。
+**长按界面或按 Menu** 打开设置，提供 Auto、Manual address、USB relay、Choose phone again，以及明确的“暂停采集 / 恢复采集”选项。点击**关闭**或按 Back 可关闭设置弹窗。手动地址格式为 `http://<地址>:18080`；USB 模式使用 `http://127.0.0.1:18080`，仍需要电脑上的既有 USB 中继。Choose phone again 会忘记已选择的手机。短按界面或 Enter/DPAD 仅用于恢复已暂停的采集，运行中不会因普通点击而停止；按住 Enter/DPAD 也不会打开菜单。需要暂停时从菜单选择“暂停采集”。主界面 Back 仍先停止，再退出。全屏状态文字关闭系统默认焦点高亮，窗口与系统栏均使用不透明黑底。
+
+Android 10 及以上的音频诊断日志会读取当前 AudioRecord 的配置，记录 `silenced=true/false/unknown`；`unknown` 表示配置不可用，不能当作 `false`。仅系统明确返回 `true` 时，单行界面提示“系统提示麦克风静音”。诊断不会改动录音参数或声音路由，也不会仅凭 RMS 很低就断定麦克风被系统静音。
 
 启动参数仍兼容：显式 `pc_base_url` 会在本次启动固定连接该地址，并保存为以后自动模式的后备地址；`auto_discover=true` 显式切回自动，覆盖旧保存的 USB 地址。设置界面选择的模式会保存，仅传入一次 URL 不会把以后的普通启动永久绑定到 USB。
 
