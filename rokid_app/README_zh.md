@@ -1,6 +1,6 @@
 # Rokid 采集 App
 
-此目录保存 OpenGlass Rokid 采集 App 0.2.0（versionCode 5）：发送 JPEG 与 PCM 音频，可通过 Wi-Fi 直接连接 iPhone OpenGlass，也保留电脑面板和显式 USB 中继模式。它不是眼镜系统固件。
+此目录保存 OpenGlass Rokid 采集 App 0.2.0（versionCode 6）：发送 JPEG 与 PCM 音频，可通过 Wi-Fi 直接连接 iPhone OpenGlass，也保留电脑面板和显式 USB 中继模式。它不是眼镜系统固件。
 
 ## 文件布局
 
@@ -54,7 +54,9 @@ adb -s <USB_SERIAL> install -r .\app\build\outputs\apk\wifi\app-wifi.apk
 
 自动模式**不回退 USB**，会忽略旧版保存的 `127.0.0.1`。图像和音频共用一个已选地址；运行中断线按 1 秒起步、最多 30 秒的间隔重试，换网后重新发现。这不替代系统连接热点的步骤。
 
-界面上的 **Connection / 连接设置** 按钮（也可用 Menu 或长按状态文字）提供：Auto、Manual address、USB relay、Choose phone again。手动地址格式为 `http://<地址>:18080`；USB 模式使用 `http://127.0.0.1:18080`，仍需要电脑上的既有 USB 中继。Choose phone again 会忘记已选择的手机。点击状态文字或 Enter/DPAD 可启停；Back 先停止，再退出。
+眼镜主界面采用黑底、较暗的居中单行提示：`OpenGlass · 已连接`、`OpenGlass · 连接中` 或 `OpenGlass · 已暂停`。只在状态变化时更新，不显示计数、地址或滚动调试文字；诊断信息仍可从 logcat 查看。“已连接”表示音频连接已建立，不代表 iPhone 此刻已准备好识别。
+
+**长按界面或按 Menu** 打开连接设置，提供 Auto、Manual address、USB relay、Choose phone again。手动地址格式为 `http://<地址>:18080`；USB 模式使用 `http://127.0.0.1:18080`，仍需要电脑上的既有 USB 中继。Choose phone again 会忘记已选择的手机。短按界面或 Enter/DPAD 可启停；Back 先停止，再退出。
 
 启动参数仍兼容：显式 `pc_base_url` 会在本次启动固定连接该地址，并保存为以后自动模式的后备地址；`auto_discover=true` 显式切回自动，覆盖旧保存的 USB 地址。设置界面选择的模式会保存，仅传入一次 URL 不会把以后的普通启动永久绑定到 USB。
 

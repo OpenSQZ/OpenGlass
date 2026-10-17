@@ -24,17 +24,19 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import android.text.TextUtils
 import android.util.Log
 import android.util.Range
 import android.util.Size
 import android.view.KeyEvent
+import android.view.Gravity
 import android.view.Surface
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.TextView
 import android.widget.Button
 import android.widget.EditText
-import android.widget.LinearLayout
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.nio.ByteBuffer
@@ -152,34 +154,35 @@ class MainActivity : Activity() {
         configurePcAddress()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.decorView.systemUiVisibility =
-            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
 
         hud = TextView(this).apply {
             setBackgroundColor(Color.BLACK)
-            setTextColor(Color.rgb(40, 255, 110))
-            textSize = 15f
-            typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(18, 18, 18, 18)
+            setTextColor(Color.rgb(140, 140, 140))
+            textSize = 20f
+            typeface = android.graphics.Typeface.DEFAULT
+            gravity = Gravity.CENTER
+            setSingleLine(true)
+            ellipsize = TextUtils.TruncateAt.END
+            val inset = (24 * resources.displayMetrics.density).toInt()
+            setPadding(inset, 0, inset, 0)
         }
         hud.setOnClickListener { toggleStartStop() }
         hud.setOnLongClickListener { showConnectionSettings(); true }
-        val connectionButton = Button(this).apply {
-            text = "Connection / 连接设置"
-            setOnClickListener { showConnectionSettings() }
-        }
-        setContentView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.BLACK)
-            addView(connectionButton)
-            addView(hud)
-        })
+        setContentView(hud, ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+        ))
         endpointController = EndpointController(this, { endpoint ->
             currentEndpoint = endpoint
             imageConnection?.disconnect()
             closeAudioWebSocket()
             reconnectDelayMs = 1_000L
             if (running && endpoint != null) connectAudioWebSocket()
-        }, { connectionStatus = it })
+        }, { status ->
+            if (connectionStatus != status) Log.i(TAG, "Connection: $status")
+            connectionStatus = status
+        })
         Log.i(TAG, "onCreate explicit=$explicitUrl")
         mainHandler.post(hudTick)
 
@@ -1113,21 +1116,14 @@ class MainActivity : Activity() {
     }
 
     private fun updateHud() {
-        val up = if (running) (System.currentTimeMillis() - startMs) / 1000 else 0
-        val mode = if (running) "RUNNING" else "STOPPED"
-        hud.text = """
-            OpenGlass Rokid Sensor
-            MODE: $mode
-            CONNECTION: $connectionStatus
-            SERVER: img=$imagePostBaseText audio=$audioWsUrlText
-            AUDIO: $audioStatus source=$audioSourceText wsOpen=$wsOpen pkt=${audioPackets.get()} drop=${audioDrops.get()} rms=${fmt(lastRms)} peak=$lastPeak nz=$lastNonZero
-            IMAGE: $cameraStatus pkt=${imagePackets.get()} fail=${imageFailures.get()} size=$imageSizeText hiResDownsample=$HIGH_RES_CAPTURE_FOR_DOWNSAMPLE
-            UP: ${up}s
-            LAST ERROR: $lastError
-
-            Enter/DPAD: start-stop
-            Back: stop / exit
-        """.trimIndent()
+        val status = when {
+            !hasPermissions() -> "请允许相机和麦克风"
+            !running -> "OpenGlass · 已暂停"
+            currentEndpoint == null || !wsOpen -> "OpenGlass · 连接中"
+            else -> "OpenGlass · 已连接"
+        }
+        // Keep the glasses display still; diagnostics remain in logcat.
+        if (hud.text.toString() != status) hud.text = status
     }
 
     private data class AudioStats(val rms: Double, val peak: Int, val nonZero: Int)
