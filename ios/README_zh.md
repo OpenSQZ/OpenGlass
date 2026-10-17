@@ -177,7 +177,7 @@ Invoke-RestMethod http://127.0.0.1:18080/health
 1. iPhone“设置 → 个人热点 → 允许其他人加入”。眼镜找不到热点时可开启“最大兼容性”。首次连接时停留在热点页面，直到眼镜已加入。具体开关见 [Apple 个人热点说明](https://support.apple.com/zh-cn/111785)。热点依赖运营商支持；它分享的是蜂窝网络，不是酒店 Wi-Fi 的中继。
 2. 通过 Rokid 官方 App / 设备的 Wi-Fi 设置，让眼镜加入这个热点；密码仅在设备设置内输入。OpenGlass 不修改 Wi-Fi 密码和系统网络。
 3. iPhone 打开 OpenGlass，允许“本地网络”和语音识别；已有模型时自动启动接收，等待模型就绪即可。页面显示固定的 `OpenGlass-xxxxxxxx` 接收名称。请保持“Rokid 离线语音提问”和“朗读回答”开启。
-4. 启动眼镜 OpenGlassRokidSensor，使用“自动连接”。眼镜寻找 `_openglass._tcp` 服务，并探测当前 Wi-Fi 网关的 `:18080/health`；确认是 OpenGlass iOS 接收端后才发送音视频。地址变化后会重新发现，不把热点地址写死。
+4. 启动眼镜 **OpenGlass WiFi**，使用“自动连接”。眼镜寻找 `_openglass._tcp` 服务，并探测当前 Wi-Fi 网关的 `:18080/health`；确认是 OpenGlass iOS 接收端后才发送音视频。地址变化后会重新发现，不把热点地址写死。等手机显示“正在听 Rokid 麦克风（离线识别）”后开始说话。
 5. 确认手机出现新画面、自动语音状态后，拔掉两根 USB，等待十秒并连续问三个问题。回答播完后再说下一个问题，不需要点“结束语句”或“用最新画面提问”。
 
 眼镜暂留 USB 时，可在 Windows 手动切到自动发现模式；这条命令只做一次配置与启动，不是数据中继：
@@ -191,6 +191,7 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File 'C:\path\to\OpenGl
 ```powershell
 .\ios\windows\configure-rokid.ps1 `
   -IPhoneAddress '192.168.1.42' `
+  -Package org.opensqz.openglass.rokid.wifi `
   -Adb "$env:USERPROFILE\Downloads\platform-tools\adb.exe"
 ```
 
@@ -216,6 +217,7 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File 'C:\path\to\OpenGl
 | USB中继提示手机 `/health` 不可达 | 新App是否成功签名安装并已启动接收；是否进入后台；模型加载失败是否导致接收停止 |
 | 端口或ADB reverse已存在 | 在原会话中正常停止，或指定其他本机/眼镜端口；脚本不会杀进程抢占 |
 | `/health` 成功但计数不增长 | 眼镜相机/麦克风权限、采集App版本、ADB授权、所选设备；Wi-Fi模式另查网络互通 |
+| 无线模式没有画面，眼镜显示 Wi-Fi 已开启 | 已开启不等于已连接。先确认眼镜已加入热点，再切回手机 OpenGlass；切到热点设置期间，接收服务会因进入后台而暂停。两端恢复后自动重连，无需重跑电脑脚本 |
 | 画面到达但模型未就绪 | 两个正确的4.6模型是否下载完成、磁盘空间、模型加载报错；其他App模型沙盒不共享 |
 | 有文本回答但没声音 | “朗读回答”开关、iPhone音量/音频路由、蓝牙配对；看界面实际输出设备 |
 | 语音不可用但文字正常 | 系统语音识别权限与该语言的设备端资源；该功能不向云识别降级 |
@@ -228,7 +230,9 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File 'C:\path\to\OpenGl
 - [CI运行38890873970](https://github.com/OpenSQZ/OpenGlass/actions/runs/38890873970)成功，源提交为 `c11c87b39b5798f8b4218d3a47d5b6cc68e56091`：1399项wire protocol检查、7项工程准备测试、7项USB中继测试通过，并生成未签名的 `OpenGlass-1.0.ipa`（artifact `OpenGlass-iOS-unsigned-3`）。IPA SHA256 为 `DA76A28A87195C43EA80ECF11366724180480B5D6502DEA27A4D1AF800AD00DB`。
 - 现场设备识别为 `iPhone18,2`、iOS `26.6.2`。新版 `1.0` / build `3` 已通过本机认证签名并安装；两个对应 4.6 模型已校验并导入。2026-10-18 用户反馈：USB 连接下眼镜图像、声音和 iPhone MiniCPM 推理已跑通，仍需手动进行单轮交互。本次无线与自动多轮改动另行验证，不能继承旧版的端到端结论。
 - 无线/自动语音 iOS 源提交 `087766314c0d817a78b65c6e6a93d46b281d5576` 通过 [CI 39057876255](https://github.com/OpenSQZ/OpenGlass/actions/runs/39057876255)，生成 build `5`。1399 项协议检查、2087 项语音循环断言、7 项工程准备测试、7 项 USB relay 测试通过。IPA SHA256：`D5A8F689048DFE09E1C4F4AF4EE67E770E5FE01BE3883A0A4B414804B39BFCB7`。Windows 免费签名更新后，USB 查询已确认手机安装 build `5`，两份模型文件仍完整保留。
-- Rokid `0.2.0-wifi` / code `5` 的 `assembleWifi`、7 项 `testWifiUnitTest` 与原 `assembleDebug` 通过；APK SHA256：`A5A64849FEAC796D4688B60833E647FA3DACE1CB3F5A16BD8935AA0EA5623A13`。并存包 `org.opensqz.openglass.rokid.wifi` 已安装，旧 debug 采集 App 保留。眼镜已获得过 iPhone 热点 DHCP 地址；新 App 的权限、无线音视频和拔线后的自动连续对话仍需现场测试。
+- Rokid `0.2.0-wifi` / code `5` 的 `assembleWifi`、7 项 `testWifiUnitTest` 与原 `assembleDebug` 通过；APK SHA256：`A5A64849FEAC796D4688B60833E647FA3DACE1CB3F5A16BD8935AA0EA5623A13`。并存包 `org.opensqz.openglass.rokid.wifi` 已安装，旧 debug 采集 App 保留；新 App 的相机和麦克风权限已确认允许。
+- 2026-10-18 热点真机测试：眼镜直接向当前 iPhone 热点网关发送图像和音频，手机接收计数持续增长。拔掉眼镜 USB 后，ADB 已无设备，手机仍持续收流，`completed_turns` 增至 `3`。随后用户确认：无需点按钮即可连续问答，且眼镜和 iPhone 两根 USB 均拔掉后仍正常。已验证本机 ASR → MiniCPM-V 4.6 → TTS 的无线自动多轮流程；酒店 Wi-Fi 尚未实测。
+- 包含 Android 最终改动的提交 `c439fa3` 也通过 [CI 39058773419](https://github.com/OpenSQZ/OpenGlass/actions/runs/39058773419)。其 iOS Swift 源码与已安装的 build `5` 相同，无需再次安装。
 - 不在此文档写入个人设备序列号、UDID、Apple账号或内网凭据。现场更新请用设备类型和验证结果描述。
 
 可重复执行无设备测试：
