@@ -40,7 +40,7 @@ function Get-OpenGlassRokid {
     }
     $listing = Invoke-OpenGlassAdb $Adb @('-s', $Serial, 'shell', 'pm', 'list', 'packages')
     $installed = @($listing -split '\r?\n' | ForEach-Object {
-        if ($_ -match '^package:(org\.opensqz\.openglass\.rokid(?:\.debug)?)\s*$') { $Matches[1] }
+        if ($_ -match '^package:(org\.opensqz\.openglass\.rokid(?:\.(?:debug|wifi))?)\s*$') { $Matches[1] }
     })
     if (-not $Package) {
         if ($installed.Count -ne 1) { throw 'Expected exactly one OpenGlass Rokid package. Install the collector or pass -Package for the installed debug/release variant.' }
@@ -48,7 +48,7 @@ function Get-OpenGlassRokid {
     }
     if ($Package -notin $installed) { throw 'The requested OpenGlass Rokid package is not installed.' }
     $info = Invoke-OpenGlassAdb $Adb @('-s', $Serial, 'shell', 'dumpsys', 'package', $Package)
-    if ($info -notmatch 'versionName=((?:0\.1\.3|0\.2\.0)(?:-debug)?)(?:\s|$)') {
+    if ($info -notmatch 'versionName=((?:0\.1\.3|0\.2\.0)(?:-(?:debug|wifi))?)(?:\s|$)') {
         throw 'Collector version 0.1.3 or 0.2.0 is required. Upgrade or review newer protocol compatibility first.'
     }
     $version = $Matches[1]

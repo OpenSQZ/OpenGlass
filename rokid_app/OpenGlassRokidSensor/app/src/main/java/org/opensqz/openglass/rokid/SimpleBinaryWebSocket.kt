@@ -11,15 +11,23 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Locale
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.net.SocketFactory
 
 private const val WS_TAG = "OpenGlassRokid"
 private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+private val WS_WATCHDOG = Executors.newSingleThreadScheduledExecutor { r ->
+    Thread(r, "ws-write-watchdog").apply { isDaemon = true }
+}
 
 class SimpleBinaryWebSocket(
     private val url: String,
     private val listener: Listener,
     private val queueCapacity: Int = 8,
+    private val socketFactory: SocketFactory? = null,
 ) {
     interface Listener {
         fun onOpen()
@@ -30,12 +38,15 @@ class SimpleBinaryWebSocket(
     private val random = SecureRandom()
     private val open = AtomicBoolean(false)
     private val stopped = AtomicBoolean(false)
+    private val notified = AtomicBoolean(false)
     private val queue = ArrayBlockingQueue<ByteArray>(queueCapacity)
     private val writeLock = Object()
     @Volatile private var socket: Socket? = null
     @Volatile private var output: BufferedOutputStream? = null
     private var readerThread: Thread? = null
     private var writerThread: Thread? = null
+    @Volatile private var writeStartedNanos = 0L
+    @Volatile private var watchdog: ScheduledFuture<*>? = null
 
     fun start() {
         readerThread = Thread({ runReader() }, "simple-ws-reader").also { it.start() }
@@ -44,15 +55,15 @@ class SimpleBinaryWebSocket(
     fun close() {
         stopped.set(true)
         open.set(false)
-        try {
-            writeFrame(0x8, ByteArray(0))
-        } catch (_: Throwable) {
-        }
+        // Closing a stale network must never block the main thread on a socket write.
         try {
             socket?.close()
         } catch (_: Throwable) {
         }
         socket = null
+        writerThread?.interrupt()
+        queue.clear()
+        watchdog?.cancel(false)
     }
 
     fun isOpen(): Boolean = open.get()
@@ -74,9 +85,12 @@ class SimpleBinaryWebSocket(
                 append(if (uri.rawPath.isNullOrEmpty()) "/" else uri.rawPath)
                 if (!uri.rawQuery.isNullOrEmpty()) append('?').append(uri.rawQuery)
             }
-            val sock = Socket()
+            val sock = socketFactory?.createSocket() ?: Socket()
             socket = sock
+            if (stopped.get()) return
             sock.connect(java.net.InetSocketAddress(uri.host, port), 3_000)
+            if (stopped.get()) return
+            sock.soTimeout = 5_000
             val input = BufferedInputStream(sock.getInputStream())
             val out = BufferedOutputStream(sock.getOutputStream())
             output = out
@@ -86,7 +100,7 @@ class SimpleBinaryWebSocket(
             val key = Base64.encodeToString(keyBytes, Base64.NO_WRAP)
             val request = (
                 "GET $path HTTP/1.1\r\n" +
-                    "Host: ${uri.host}:$port\r\n" +
+                    "Host: ${uri.rawAuthority}\r\n" +
                     "Upgrade: websocket\r\n" +
                     "Connection: Upgrade\r\n" +
                     "Sec-WebSocket-Key: $key\r\n" +
@@ -112,7 +126,18 @@ class SimpleBinaryWebSocket(
                 throw IOExceptionCompat("bad websocket accept")
             }
 
+            if (stopped.get()) return
+            sock.soTimeout = 0
             open.set(true)
+            watchdog = WS_WATCHDOG.scheduleAtFixedRate({
+                val started = writeStartedNanos
+                if (!stopped.get() && started != 0L && System.nanoTime() - started >= TimeUnit.SECONDS.toNanos(10)) {
+                    if (notified.compareAndSet(false, true)) {
+                        listener.onFailure(IOExceptionCompat("websocket write timed out"))
+                    }
+                    close()
+                }
+            }, 1, 1, TimeUnit.SECONDS)
             listener.onOpen()
             writerThread = Thread({ runWriter() }, "simple-ws-writer").also { it.start() }
 
@@ -121,13 +146,16 @@ class SimpleBinaryWebSocket(
                 if (opcode == 0x8) break
             }
             open.set(false)
-            listener.onClosed("closed")
+            if (!stopped.get() && notified.compareAndSet(false, true)) listener.onClosed("closed")
         } catch (t: Throwable) {
             open.set(false)
-            if (!stopped.get()) listener.onFailure(t)
+            if (!stopped.get() && notified.compareAndSet(false, true)) listener.onFailure(t)
         } finally {
             stopped.set(true)
             open.set(false)
+            writerThread?.interrupt()
+            queue.clear()
+            watchdog?.cancel(false)
             try {
                 socket?.close()
             } catch (_: Throwable) {
@@ -143,7 +171,8 @@ class SimpleBinaryWebSocket(
             }
         } catch (t: Throwable) {
             open.set(false)
-            if (!stopped.get()) listener.onFailure(t)
+            if (!stopped.get() && notified.compareAndSet(false, true)) listener.onFailure(t)
+            try { socket?.close() } catch (_: Throwable) { }
         }
     }
 
@@ -159,9 +188,10 @@ class SimpleBinaryWebSocket(
         } else if (len == 127) {
             var longLen = 0L
             repeat(8) { longLen = (longLen shl 8) or readByte(input).toLong() }
-            if (longLen > Int.MAX_VALUE) throw IOExceptionCompat("websocket frame too large")
+            if (longLen < 0 || longLen > 1_048_576) throw IOExceptionCompat("websocket frame too large")
             len = longLen.toInt()
         }
+        if (len > 1_048_576 || (opcode >= 0x8 && len > 125)) throw IOExceptionCompat("websocket frame too large")
         val mask = if (masked) ByteArray(4) { readByte(input).toByte() } else null
         val payload = ByteArray(len)
         var off = 0
@@ -184,6 +214,9 @@ class SimpleBinaryWebSocket(
     private fun writeFrame(opcode: Int, payload: ByteArray) {
         val out = output ?: return
         synchronized(writeLock) {
+            if (stopped.get()) return
+            writeStartedNanos = System.nanoTime()
+            try {
             out.write(0x80 or (opcode and 0x0f))
             val len = payload.size
             when {
@@ -204,6 +237,9 @@ class SimpleBinaryWebSocket(
             out.write(mask)
             for (i in payload.indices) out.write(payload[i].toInt() xor mask[i % 4].toInt())
             out.flush()
+            } finally {
+                writeStartedNanos = 0L
+            }
         }
     }
 

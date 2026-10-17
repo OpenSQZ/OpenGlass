@@ -291,8 +291,8 @@ class RokidDevice:
         rc, info = self.run("shell", "dumpsys", "package",
                             self.config.get("rokid_package",
                                             "org.opensqz.openglass.rokid.debug"))
-        if rc or not re.search(r"versionName=0\.1\.3(?:-debug)?(?:\s|$)", info):
-            raise RuntimeError("尚未确认动态地址版本 0.1.3 已安装；"
+        if rc or not re.search(r"versionName=(?:0\.1\.3|0\.2\.0)(?:-(?:debug|wifi))?(?:\s|$)", info):
+            raise RuntimeError("尚未确认动态地址版本 0.1.3 / 0.2.0 已安装；"
                                "旧版会忽略 pc_base_url，请先升级采集程序")
         self.run("shell", "input", "keyevent", "KEYCODE_WAKEUP")
         rc, out = self.run("shell", "am", "start", "-S", "-W", "-n", activity,

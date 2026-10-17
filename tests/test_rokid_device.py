@@ -30,11 +30,13 @@ class RokidDeviceTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): d.select()
 
     def test_launch_passes_configured_address(self):
-        d = self.device()
-        d.run = Mock(return_value=(0, "versionName=0.1.3-debug\nStatus: ok"))
-        d.launch()
-        args = d.run.call_args.args
-        self.assertEqual(args[-3:], ("--es", "pc_base_url", "http://192.168.1.5:18080"))
+        for version in ("0.1.3-debug", "0.2.0-debug", "0.2.0-wifi", "0.2.0"):
+            with self.subTest(version=version):
+                d = self.device()
+                d.run = Mock(return_value=(0, f"versionName={version}\nStatus: ok"))
+                d.launch()
+                args = d.run.call_args.args
+                self.assertEqual(args[-3:], ("--es", "pc_base_url", "http://192.168.1.5:18080"))
 
     def test_old_app_does_not_silently_ignore_new_address(self):
         d = self.device();d.run = Mock(return_value=(0, "versionName=0.1.2-debug"))
