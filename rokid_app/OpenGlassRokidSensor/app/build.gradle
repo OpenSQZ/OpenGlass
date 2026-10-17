@@ -11,7 +11,7 @@ android {
         applicationId 'org.opensqz.openglass.rokid'
         minSdk 28
         targetSdk 34
-        versionCode 7
+        versionCode 8
         versionName '0.2.0'
         manifestPlaceholders = [appLabel: '@string/app_name']
 

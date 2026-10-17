@@ -65,7 +65,7 @@ struct OpenGlassUtteranceTiming {
         if hasText, let lastTranscriptAt, now - lastTranscriptAt >= 2.5 {
             return .finish
         }
-        if let lastVoiceAt, now - lastVoiceAt >= 1.3 {
+        if hasText, let lastVoiceAt, now - lastVoiceAt >= 1.3 {
             return .finish
         }
         if now - startedAt >= 25 {

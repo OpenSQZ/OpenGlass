@@ -114,7 +114,6 @@ class MainActivity : Activity() {
     @Volatile private var audioSourceText = "none"
     @Volatile private var cameraStatus = "idle"
     @Volatile private var audioStatus = "idle"
-    @Volatile private var microphoneSilenced: Boolean? = null
     @Volatile private var imageSizeText = "none"
     @Volatile private var audioWsUrlText = "none"
     @Volatile private var imagePostBaseText = "none"
@@ -339,7 +338,6 @@ class MainActivity : Activity() {
     private fun startAll() {
         if (running) return
         running = true
-        microphoneSilenced = null
         captureGeneration.incrementAndGet()
         startMs = System.currentTimeMillis()
         lastError = "none"
@@ -366,7 +364,6 @@ class MainActivity : Activity() {
     private fun stopAll() {
         if (!running) return
         running = false
-        microphoneSilenced = null
         captureGeneration.incrementAndGet()
         cameraRestartPending.set(false)
         Log.i(TAG, "stopAll")
@@ -491,10 +488,10 @@ class MainActivity : Activity() {
                     if (now - lastLog >= 1_000L) {
                         // Observe this recorder only. An unavailable configuration stays unknown;
                         // this diagnostic does not alter the audio source, routing or samples.
+                        // Rokid can report true even with audible PCM, so do not infer silence from it.
                         val silenced = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                             runCatching { recorder.activeRecordingConfiguration?.isClientSilenced }.getOrNull()
                         } else null
-                        if (token == captureGeneration.get()) microphoneSilenced = silenced
                         Log.i(
                             TAG,
                             "audio source=$audioSourceText pkt=${audioPackets.get()} drop=${audioDrops.get()} rms=${fmt(lastRms)} peak=$lastPeak nonzero=$lastNonZero wsOpen=$wsOpen silenced=${silenced?.toString() ?: "unknown"}",
@@ -513,7 +510,6 @@ class MainActivity : Activity() {
                 recorder.release()
                 if (activeRecorder === recorder) {
                     activeRecorder = null
-                    microphoneSilenced = null
                 }
                 Log.i(TAG, "AudioRecord stopped")
             }
@@ -1149,7 +1145,6 @@ class MainActivity : Activity() {
         val status = when {
             !hasPermissions() -> "请允许相机和麦克风"
             !running -> "OpenGlass · 已暂停"
-            microphoneSilenced == true -> "系统提示麦克风静音"
             currentEndpoint == null || !wsOpen -> "OpenGlass · 连接中"
             else -> "OpenGlass · 已连接"
         }

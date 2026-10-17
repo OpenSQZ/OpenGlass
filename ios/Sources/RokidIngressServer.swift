@@ -30,6 +30,9 @@ final class RokidIngressServer {
     private var audioPacketCount = 0
     private var conversationPhase = "waiting"
     private var completedTurns = 0
+    private var speechDiagnostics = OpenGlassSpeechDiagnostics()
+    private var speechGate = "receiver_stopped"
+    private let appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
     private var epoch = UUID()
     // Read/written only on queue. epoch belongs to the main queue and only
     // filters UI callbacks; this also prevents an old listener accepting work.
@@ -73,7 +76,7 @@ final class RokidIngressServer {
             self.clients[client.id] = client
             client.healthJSON = { [weak self] in
                 guard let self else { return "{}" }
-                return "{\"service\":\"openglass-ios\",\"protocol\":1,\"receiver_name\":\"\(Self.serviceName)\",\"image_count\":\(self.imageCount),\"audio_packets_in\":\(self.audioPacketCount),\"audio_connected\":\(self.audioClient != nil),\"conversation_phase\":\"\(self.conversationPhase)\",\"completed_turns\":\(self.completedTurns)}"
+                return self.healthJSON()
             }
             client.onImage = { [weak self] data in
                 guard let self else { return }
@@ -125,15 +128,43 @@ final class RokidIngressServer {
 
     /// Only operational metadata is exposed; recognized speech and answers
     /// never appear in network diagnostics.
-    func setConversationStatus(phase: String, completedTurns: Int) {
+    func setConversationStatus(phase: String, completedTurns: Int,
+                               asr: OpenGlassSpeechDiagnostics, gate: String) {
         dispatchPrecondition(condition: .onQueue(.main))
-        let safePhase = ["paused", "listening", "thinking", "speaking", "waiting"].contains(phase) ? phase : "waiting"
+        let safePhase = ["paused", "listening", "finishing", "cooldown", "thinking", "speaking", "waiting"].contains(phase) ? phase : "waiting"
         let generation = epoch
         queue.async { [weak self] in
             guard let self, self.servingGeneration == generation else { return }
             self.conversationPhase = safePhase
             self.completedTurns = max(0, completedTurns)
+            self.speechDiagnostics = asr
+            self.speechGate = gate
         }
+    }
+
+    private func healthJSON() -> String {
+        let asr = speechDiagnostics
+        var details: [String: Any] = [
+            "state": asr.state.rawValue, "gate": speechGate,
+            "sessions": asr.sessions, "accepted_samples": asr.acceptedSamples,
+            "session_samples": asr.sessionSamples, "last_rms": asr.lastRMS,
+            "session_peak_rms": asr.sessionPeakRMS, "partial_count": asr.partialCount,
+            "nonempty_partial_count": asr.nonemptyPartialCount,
+            "empty_final_count": asr.emptyFinalCount, "nonempty_final_count": asr.nonemptyFinalCount,
+            "failure_count": asr.failureCount, "last_failure_domain": asr.lastFailureDomain,
+            "last_end_reason": asr.lastEndReason
+        ]
+        if let code = asr.lastFailureCode { details["last_failure_code"] = code }
+        let status: [String: Any] = [
+            "service": "openglass-ios", "protocol": 1, "receiver_name": Self.serviceName,
+            "app_build": appBuild, "image_count": imageCount,
+            "audio_packets_in": audioPacketCount, "audio_connected": audioClient != nil,
+            "conversation_phase": conversationPhase, "completed_turns": completedTurns,
+            "asr": details
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: status),
+              let json = String(data: data, encoding: .utf8) else { return "{}" }
+        return json
     }
 
     func stop() {
@@ -150,6 +181,8 @@ final class RokidIngressServer {
             audioPacketCount = 0
             conversationPhase = "waiting"
             completedTurns = 0
+            speechDiagnostics.reset()
+            speechGate = "receiver_stopped"
             imageDeliveryInFlight = false
             pendingAudioBytes = 0
             closing.forEach { $0.close() }

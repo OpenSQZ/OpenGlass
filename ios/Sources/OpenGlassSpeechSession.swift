@@ -11,8 +11,12 @@ final class OpenGlassSpeechSession {
     var onError: ((Failure) -> Void)?
     var onStatus: ((String) -> Void)?
     private(set) var isListening = false
+    private(set) var diagnostics = OpenGlassSpeechDiagnostics()
     var isActive: Bool { request != nil }
     var isFinishing: Bool { ending }
+    var hasPendingHandoffAudio: Bool {
+        handoff.hasReadyAudio(at: ProcessInfo.processInfo.systemUptime)
+    }
     private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
@@ -25,6 +29,7 @@ final class OpenGlassSpeechSession {
     private var lastTranscriptAt: TimeInterval?
     private var lastPacketAt = ProcessInfo.processInfo.systemUptime
     private var pendingByte: UInt8?
+    private var handoff = OpenGlassSpeechHandoffBuffer()
     private var ending = false
     private let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                       sampleRate: 16_000, channels: 1, interleaved: false)!
@@ -39,15 +44,21 @@ final class OpenGlassSpeechSession {
     }
 
     func start(localeIdentifier: String) throws {
-        stop()
+        // Only a normal empty final can prepare this one-shot handoff. Taking
+        // it before cleanup preserves new speech received after endAudio.
+        let carriedAudio = handoff.takeReadyAudio(now: ProcessInfo.processInfo.systemUptime)
+        stop(reason: "restart")
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
+            recordFailure(.permissionDenied)
             throw Failure.permissionDenied
         }
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier)),
               recognizer.supportsOnDeviceRecognition else {
+            recordFailure(.languageUnavailable)
             throw Failure.languageUnavailable
         }
         guard recognizer.isAvailable else {
+            recordFailure(.temporarilyUnavailable)
             throw Failure.temporarilyUnavailable
         }
         let request = SFSpeechAudioBufferRecognitionRequest()
@@ -64,6 +75,8 @@ final class OpenGlassSpeechSession {
         lastVoiceAt = nil
         lastTranscriptAt = nil
         isListening = true
+        diagnostics.started()
+        logDiagnostics(event: "started")
         let id = sessionID
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor in
@@ -75,12 +88,18 @@ final class OpenGlassSpeechSession {
                         self.lastTranscriptAt = self.lastVoiceAt
                     }
                     self.latestText = text
+                    if !result.isFinal {
+                        self.diagnostics.partial(nonempty: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
                     self.onPartial?(self.latestText)
-                    if result.isFinal { self.complete(); return }
+                    if result.isFinal {
+                        self.complete(reason: "native_final", allowHandoff: error == nil)
+                        return
+                    }
                 }
                 if let error {
                     if self.ending && !self.latestText.isEmpty {
-                        self.complete()
+                        self.complete(reason: "finalization_error", allowHandoff: false)
                     } else {
                         let failure: Failure
                         if SFSpeechRecognizer.authorizationStatus() != .authorized {
@@ -90,7 +109,8 @@ final class OpenGlassSpeechSession {
                         } else {
                             failure = .recognitionInterrupted(error.localizedDescription)
                         }
-                        self.stop()
+                        self.stop(reason: "recognizer_error")
+                        self.recordFailure(failure, underlying: error)
                         self.onError?(failure)
                     }
                 }
@@ -99,11 +119,19 @@ final class OpenGlassSpeechSession {
         timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        if !carriedAudio.isEmpty { appendPCM16LE(carriedAudio) }
         onStatus?("正在听 Rokid 麦克风（离线识别）")
     }
 
     func appendPCM16LE(_ data: Data) {
-        guard isListening, !ending, let request, !data.isEmpty else { return }
+        guard !data.isEmpty else { return }
+        if ending {
+            // This is only the short endAudio/final-result window. Controller
+            // gates still discard all inference, TTS and user-paused audio.
+            handoff.append(data)
+            return
+        }
+        guard isListening, let request else { return }
         // Preserve a split sample across websocket messages. At most one byte
         // is retained; audio received during inference/TTS is simply dropped.
         var bytes = [UInt8]()
@@ -125,15 +153,24 @@ final class OpenGlassSpeechSession {
         }
         let now = ProcessInfo.processInfo.systemUptime
         lastPacketAt = now
-        if sqrt(squareSum / Float(frames)) > 0.012 { lastVoiceAt = now }
+        let rms = sqrt(squareSum / Float(frames))
+        if rms > 0.012 { lastVoiceAt = now }
         request.append(buffer)
+        diagnostics.appended(samples: frames, rms: Double(rms))
     }
 
     /// Stop accepting audio and give the recognizer time to finalize its text.
-    func finishUtterance() {
+    func finishUtterance(reason: String = "manual") {
         guard isListening, !ending else { return }
         ending = true
         isListening = false
+        handoff.begin()
+        // A split sample's first byte has not reached the old request. Keep it
+        // ahead of the post-endAudio stream so the next request stays aligned.
+        if let pendingByte { handoff.append(Data([pendingByte])) }
+        pendingByte = nil
+        diagnostics.finishing(reason: reason)
+        logDiagnostics(event: "finishing")
         timer?.invalidate()
         timer = nil
         request?.endAudio()
@@ -142,12 +179,20 @@ final class OpenGlassSpeechSession {
         finishTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.sessionID == id else { return }
-                self.complete()
+                self.complete(reason: "finish_timeout")
             }
         }
     }
 
-    func stop() {
+    func stop(reason: String = "cancelled") {
+        cancelRecognition(reason: reason, preservingHandoff: false)
+    }
+
+    private func cancelRecognition(reason: String, preservingHandoff: Bool) {
+        if !preservingHandoff { handoff.clear() }
+        let wasActive = diagnostics.state != .idle
+        // No-op cleanup after a final/error must not replace its useful cause.
+        if wasActive { diagnostics.stopped(reason: reason) }
         sessionID = UUID()
         isListening = false
         ending = false
@@ -161,6 +206,13 @@ final class OpenGlassSpeechSession {
         request = nil
         recognizer = nil
         pendingByte = nil
+        if wasActive { logDiagnostics(event: "stopped") }
+    }
+
+    /// Reset only when beginning a new receiver run, never between ASR retries.
+    func resetDiagnostics() {
+        diagnostics.reset()
+        logDiagnostics(event: "reset")
     }
 
     private func tick() {
@@ -168,24 +220,61 @@ final class OpenGlassSpeechSession {
         let now = ProcessInfo.processInfo.systemUptime
         let action = OpenGlassUtteranceTiming.action(now: now, startedAt: startedAt,
             lastPacketAt: lastPacketAt, lastVoiceAt: lastVoiceAt,
-            lastTranscriptAt: lastTranscriptAt, hasText: !latestText.isEmpty)
+            lastTranscriptAt: lastTranscriptAt, hasText: containsWords(latestText))
         switch action {
-        case .finish: finishUtterance()
+        case .finish: finishUtterance(reason: "timer_finish")
         case .audioTimeout:
-            stop()
+            stop(reason: "audio_timeout")
+            recordFailure(.audioTimeout)
             onError?(.audioTimeout)
         case .listen: break
         }
     }
 
-    private func complete() {
+    private func complete(reason: String, allowHandoff: Bool = true) {
         let candidate = latestText.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Punctuation-only final results are not questions. Silence and failed
-        // recognition finish normally and let the controller schedule a retry.
-        let hasWords = candidate.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
-        let text = hasWords ? candidate : ""
-        stop()
+        // Punctuation-only final results are not questions. A normal empty
+        // result lets the controller rearm immediately when fresh PCM is ready.
+        let text = containsWords(candidate) ? candidate : ""
+        let preserveHandoff = text.isEmpty && allowHandoff
+        handoff.complete(empty: preserveHandoff, now: ProcessInfo.processInfo.systemUptime)
+        diagnostics.completed(nonempty: !text.isEmpty, reason: reason)
+        cancelRecognition(reason: reason, preservingHandoff: preserveHandoff)
+        logDiagnostics(event: "final")
         onFinal?(text)
+    }
+
+    private func containsWords(_ text: String) -> Bool {
+        text.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
+    }
+
+    private func recordFailure(_ failure: Failure, underlying: Error? = nil) {
+        let reason: String
+        let localCode: Int
+        switch failure {
+        case .permissionDenied: reason = "permission_denied"; localCode = 1
+        case .languageUnavailable: reason = "language_unavailable"; localCode = 2
+        case .temporarilyUnavailable: reason = "recognizer_unavailable"; localCode = 3
+        case .audioTimeout: reason = "audio_timeout"; localCode = 4
+        case .recognitionInterrupted: reason = "recognizer_error"; localCode = 5
+        }
+        let nativeError = underlying.map { $0 as NSError }
+        diagnostics.failed(domain: nativeError?.domain ?? "OpenGlassSpeech",
+                           code: nativeError?.code ?? localCode, reason: reason)
+        logDiagnostics(event: "failed")
+    }
+
+    /// State transitions only: never log PCM, recognition text, or error descriptions.
+    private func logDiagnostics(event: String) {
+        let d = diagnostics
+        let summary = "OpenGlassASR event=\(event) state=\(d.state.rawValue) session=\(d.sessions)"
+            + " accepted_samples=\(d.acceptedSamples) session_samples=\(d.sessionSamples)"
+            + " rms=\(String(format: "%.5f", d.lastRMS)) peak_rms=\(String(format: "%.5f", d.sessionPeakRMS))"
+            + " partials=\(d.partialCount) nonempty_partials=\(d.nonemptyPartialCount)"
+            + " empty_finals=\(d.emptyFinalCount) nonempty_finals=\(d.nonemptyFinalCount)"
+            + " failures=\(d.failureCount) failure_domain=\(d.lastFailureDomain)"
+            + " failure_code=\(d.lastFailureCode.map(String.init) ?? "none") end=\(d.lastEndReason)"
+        NSLog("%@", summary)
     }
 
     enum Failure: LocalizedError {

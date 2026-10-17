@@ -207,7 +207,9 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File 'C:\path\to\OpenGl
 
 自动循环为“听问题 → 看图推理 → 朗读回答 → 等待回声消退 → 继续听问题”。推理/播报时丢弃输入语音，不积压旧问题；空白识别、短暂识别错误、音频重连与新画面恢复均由状态机处理。权限拒绝、离线语言资源缺失、模型错误仍会明确显示，主动暂停必须由用户恢复。这是逐轮交互，暂不支持边播报边打断。
 
-`/health` 的 `conversation_phase` 显示 `waiting/listening/thinking/speaking/paused`，`completed_turns` 记录本次接收会话中完成的回答数；不返回识别文本或回答正文。测试至少三轮，并留空静音约30秒后再提问，确认没有空问题、重复回答或需要手动唤醒。
+正常空白识别不增加错误退避：有收尾缓冲就立即进入下一轮，否则等下一包声音到达再开始；真实识别错误仍按0.5～8秒退避。仅在 `endAudio` 到空结果之间暂存最多2.2秒的新声音，空结果后须在0.5秒内交给下一轮，避免收尾期间漏掉下一句。已送入识别器的声音不重放；非空结果、识别错误、暂停、断线和后台切换均清空缓冲。没有文字时的短促噪声不再触发1.3秒收尾，安静时按25秒轮换识别任务。
+
+手机“自动语音”状态显示实际听音、收尾、等待或播报状态及已完成轮数。`/health` 的 `conversation_phase` 显示 `waiting/listening/finishing/cooldown/thinking/speaking/paused`，`completed_turns` 记录本次接收会话中完成的回答数，`app_build` 用于核对安装版本。`asr` 提供实际送入识别器的样本数、音量、非空结果数和错误域/错误码，每秒刷新；不返回识别文本、音频或回答正文。若音频包持续增长但 `asr.accepted_samples` 不增长，先检查 `asr.gate`；若样本和音量增长但没有非空结果，再检查识别错误。测试至少三轮，并留空静音约30秒后再提问，确认没有空问题、重复回答或需要手动唤醒。
 
 ## 排障
 
@@ -233,6 +235,7 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File 'C:\path\to\OpenGl
 - Rokid `0.2.0-wifi` / code `5` 的 `assembleWifi`、7 项 `testWifiUnitTest` 与原 `assembleDebug` 通过；APK SHA256：`A5A64849FEAC796D4688B60833E647FA3DACE1CB3F5A16BD8935AA0EA5623A13`。并存包 `org.opensqz.openglass.rokid.wifi` 已安装，旧 debug 采集 App 保留；新 App 的相机和麦克风权限已确认允许。
 - 2026-10-18 热点真机测试：眼镜直接向当前 iPhone 热点网关发送图像和音频，手机接收计数持续增长。拔掉眼镜 USB 后，ADB 已无设备，手机仍持续收流，`completed_turns` 增至 `3`。随后用户确认：无需点按钮即可连续问答，且眼镜和 iPhone 两根 USB 均拔掉后仍正常。已验证本机 ASR → MiniCPM-V 4.6 → TTS 的无线自动多轮流程；酒店 Wi-Fi 尚未实测。
 - 包含 Android 最终改动的提交 `c439fa3` 也通过 [CI 39058773419](https://github.com/OpenSQZ/OpenGlass/actions/runs/39058773419)。其 iOS Swift 源码与已安装的 build `5` 相同，无需再次安装。
+- 后续用户确认单行眼镜界面和首轮 ASR/TTS 正常，但再次提问出现空识别，说明此前成功记录不足以证明持续对话可靠。此次修复空轮退避和收尾期间丢音，并增加 ASR 操作状态诊断；新版端到端多轮结果待安装后复测。
 - 不在此文档写入个人设备序列号、UDID、Apple账号或内网凭据。现场更新请用设备类型和验证结果描述。
 
 可重复执行无设备测试：
