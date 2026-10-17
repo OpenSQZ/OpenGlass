@@ -10,3 +10,4 @@ sessions/
 *.keystore
 *.jks
 *.before-*
+.build-tools/

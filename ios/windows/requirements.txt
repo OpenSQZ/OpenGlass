@@ -1,0 +1,2 @@
+# API verified against the upstream v11.32.0 tag; use a dedicated Python 3.11+ venv.
+pymobiledevice3==11.32.0

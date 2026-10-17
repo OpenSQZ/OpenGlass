@@ -2,13 +2,16 @@ package org.opensqz.openglass.rokid
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
+import android.graphics.drawable.ColorDrawable
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
@@ -19,21 +22,24 @@ import android.media.AudioRecord
 import android.media.ImageReader
 import android.media.MediaRecorder
 import android.os.Bundle
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import android.text.TextUtils
 import android.util.Log
 import android.util.Range
 import android.util.Size
 import android.view.KeyEvent
-import android.view.MotionEvent
+import android.view.Gravity
 import android.view.Surface
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.TextView
+import android.widget.EditText
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
-import java.net.URL
 import java.nio.ByteBuffer
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
@@ -57,31 +63,42 @@ private const val MANUAL_EXPOSURE_ENABLED = true
 private const val MANUAL_EXPOSURE_NS = 22_222_222L
 private const val MANUAL_FRAME_DURATION_NS = 44_444_444L
 private const val MANUAL_ISO = 1600
-private const val USB_REVERSE_BASE_URL = "http://127.0.0.1:18080"
-private const val USB_REVERSE_WS_URL = "ws://127.0.0.1:18080/rokid/audio"
 private const val ENHANCE_IMAGE_FOR_UPLOAD = false
 private const val ENHANCE_MIN_LUMA = 55.0
 private const val ENHANCE_TARGET_LUMA = 70.0
 
 class MainActivity : Activity() {
-    private var pcBaseUrl = BuildConfig.PC_BASE_URL
-    private var pcWsUrl = BuildConfig.PC_WS_URL
+    private var explicitUrl: String? = null
+    private lateinit var endpointController: EndpointController
+    @Volatile private var currentEndpoint: ServerEndpoint? = null
+    @Volatile private var connectionStatus = "Searching for iPhone"
+    @Volatile private var imageConnection: HttpURLConnection? = null
+    @Volatile private var activeRecorder: AudioRecord? = null
+    private var userStopped = false
+    private val captureGeneration = AtomicInteger(0)
+    private val cameraGeneration = AtomicInteger(0)
 
     private fun configurePcAddress() {
         val prefs = getSharedPreferences("pc_connection", Context.MODE_PRIVATE)
         val supplied = intent.getStringExtra("pc_base_url")
-        val candidate = supplied ?: prefs.getString("pc_base_url", BuildConfig.PC_BASE_URL)!!
+        if (intent.getBooleanExtra("auto_discover", false)) {
+            explicitUrl = null
+            prefs.edit().putString("connection_mode", "auto").apply()
+            return
+        }
+        val candidate = supplied ?: when (prefs.getString("connection_mode", "auto")) {
+            "manual" -> prefs.getString("pc_base_url", null)
+            "usb" -> USB_BASE_URL
+            else -> null
+        }
+        if (candidate == null) { explicitUrl = null; return }
         try {
-            val uri = java.net.URI(candidate.trim().trimEnd('/'))
-            require(uri.scheme == "http" && !uri.host.isNullOrBlank()
-                && uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null
-                && uri.rawPath.isNullOrEmpty() && (uri.port == -1 || uri.port in 1..65535))
-            pcBaseUrl = uri.toString()
-            pcWsUrl = "ws://${uri.rawAuthority}/rokid/audio"
-            if (supplied != null) prefs.edit().putString("pc_base_url", pcBaseUrl).apply()
-            Log.i(TAG, "PC_CONFIG applied pcBase=$pcBaseUrl pcWs=$pcWsUrl")
+            explicitUrl = ConnectionPolicy.normalizeUrl(candidate)
+            if (supplied != null) prefs.edit().putString("pc_base_url", explicitUrl).apply()
+            Log.i(TAG, "PC_CONFIG explicit=$explicitUrl")
         } catch (e: Exception) {
-            Log.e(TAG, "Invalid PC address; keeping built-in default", e)
+            explicitUrl = null
+            Log.e(TAG, "Invalid address; using automatic discovery", e)
         }
     }
 
@@ -111,10 +128,11 @@ class MainActivity : Activity() {
     private val imageUploadInFlight = AtomicBoolean(false)
     private val cameraRestartPending = AtomicBoolean(false)
 
-    private var audioThread: Thread? = null
-    private var audioWs: SimpleBinaryWebSocket? = null
+    @Volatile private var audioThread: Thread? = null
+    @Volatile private var audioWs: SimpleBinaryWebSocket? = null
     private var reconnectDelayMs = 1_000L
-    private var audioUrlIndex = 0
+    private var webSocketGeneration = 0
+    private val reconnectTask = Runnable { connectAudioWebSocket() }
 
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
@@ -136,18 +154,45 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         configurePcAddress()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Keep every layer opaque black, including the window before the HUD is drawn.
+        window.setBackgroundDrawable(ColorDrawable(Color.BLACK))
+        window.decorView.setBackgroundColor(Color.BLACK)
+        window.statusBarColor = Color.BLACK
+        window.navigationBarColor = Color.BLACK
         window.decorView.systemUiVisibility =
-            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
 
         hud = TextView(this).apply {
             setBackgroundColor(Color.BLACK)
-            setTextColor(Color.rgb(40, 255, 110))
-            textSize = 15f
-            typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(18, 18, 18, 18)
+            // The full-screen clickable TextView receives D-pad focus. The platform's
+            // default focus highlight otherwise paints a grey rectangle over its black background.
+            defaultFocusHighlightEnabled = false
+            setTextColor(Color.rgb(140, 140, 140))
+            textSize = 20f
+            typeface = android.graphics.Typeface.DEFAULT
+            gravity = Gravity.CENTER
+            setSingleLine(true)
+            ellipsize = TextUtils.TruncateAt.END
+            val inset = (24 * resources.displayMetrics.density).toInt()
+            setPadding(inset, 0, inset, 0)
         }
-        setContentView(hud)
-        Log.i(TAG, "onCreate pcBase=$pcBaseUrl pcWs=$pcWsUrl")
+        hud.setOnClickListener { resumeCapture() }
+        hud.setOnLongClickListener { showConnectionSettings(); true }
+        setContentView(hud, ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+        ))
+        endpointController = EndpointController(this, { endpoint ->
+            currentEndpoint = endpoint
+            imageConnection?.disconnect()
+            closeAudioWebSocket()
+            reconnectDelayMs = 1_000L
+            if (running && endpoint != null) connectAudioWebSocket()
+        }, { status ->
+            if (connectionStatus != status) Log.i(TAG, "Connection: $status")
+            connectionStatus = status
+        })
+        Log.i(TAG, "onCreate explicit=$explicitUrl")
         mainHandler.post(hudTick)
 
         if (hasPermissions()) {
@@ -162,18 +207,74 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         stopAll()
+        endpointController.destroy()
         mainHandler.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
 
     override fun onResume() {
         super.onResume()
-        if (hasPermissions() && !running) {
+        if (hasPermissions() && !running && !userStopped) {
             Log.i(TAG, "onResume auto-start")
             startAll()
         } else {
             scheduleCameraStart(800)
         }
+    }
+
+    override fun onNewIntent(newIntent: Intent) {
+        super.onNewIntent(newIntent)
+        setIntent(newIntent)
+        configurePcAddress()
+        if (running) endpointController.start(explicitUrl)
+        else if (hasPermissions()) { userStopped = false; startAll() }
+    }
+
+    private fun showConnectionSettings() {
+        val prefs = getSharedPreferences("pc_connection", Context.MODE_PRIVATE)
+        AlertDialog.Builder(this).setTitle("OpenGlass connection")
+            .setItems(arrayOf("Auto: iPhone hotspot / Wi-Fi", "Manual address", "USB relay", "Choose phone again",
+                if (running) "Pause capture / 暂停采集" else "Resume capture / 恢复采集")) { _, which ->
+                fun applyMode(mode: String, url: String?) {
+                    prefs.edit().putString("connection_mode", mode).apply()
+                    explicitUrl = url
+                    if (running) endpointController.start(explicitUrl)
+                }
+                when (which) {
+                    0 -> applyMode("auto", null)
+                    1 -> {
+                        val input = EditText(this).apply {
+                            setSingleLine(true)
+                            setText(prefs.getString("pc_base_url", "http://172.20.10.1:18080"))
+                            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+                        }
+                        val dialog = AlertDialog.Builder(this).setTitle("iPhone / PC HTTP address")
+                            .setView(input).setPositiveButton("Save", null).setNegativeButton("Cancel", null).create()
+                        dialog.setOnShowListener {
+                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                                try {
+                                    val url = ConnectionPolicy.normalizeUrl(input.text.toString())
+                                    prefs.edit().putString("pc_base_url", url).apply()
+                                    applyMode("manual", url)
+                                    dialog.dismiss()
+                                } catch (_: Exception) { input.error = "Use http://<address>:18080" }
+                            }
+                        }
+                        dialog.show()
+                    }
+                    2 -> applyMode("usb", USB_BASE_URL)
+                    3 -> {
+                        prefs.edit().remove("iphone_service_name").apply()
+                        applyMode("auto", null)
+                    }
+                    4 -> {
+                        if (running) {
+                            userStopped = true
+                            stopAll()
+                        } else resumeCapture()
+                    }
+                }
+            }.setNegativeButton("关闭", null).show()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -203,43 +304,41 @@ class MainActivity : Activity() {
             TAG,
             "key action=${event.action} code=${event.keyCode} name=${KeyEvent.keyCodeToString(event.keyCode)}",
         )
+        if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER) {
+            // Consume DOWN as well: forwarding it to the focused full-screen TextView can
+            // arm its long-click timer and unexpectedly open settings while a key is held.
+            if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) resumeCapture()
+            return true
+        }
         if (event.action == KeyEvent.ACTION_UP) {
             when (event.keyCode) {
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                    toggleStartStop()
-                    return true
-                }
                 KeyEvent.KEYCODE_BACK -> {
                     if (running) {
+                        userStopped = true
                         stopAll()
                         return true
                     }
                 }
+                KeyEvent.KEYCODE_MENU -> { showConnectionSettings(); return true }
             }
         }
         return super.dispatchKeyEvent(event)
-    }
-
-    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        Log.i(TAG, "touch action=${ev.action} x=${ev.x} y=${ev.y}")
-        if (ev.action == MotionEvent.ACTION_UP) {
-            toggleStartStop()
-            return true
-        }
-        return super.dispatchTouchEvent(ev)
     }
 
     private fun hasPermissions(): Boolean =
         checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-    private fun toggleStartStop() {
-        if (running) stopAll() else startAll()
+    private fun resumeCapture() {
+        if (running) return
+        userStopped = false
+        if (hasPermissions()) startAll()
     }
 
     private fun startAll() {
         if (running) return
         running = true
+        captureGeneration.incrementAndGet()
         startMs = System.currentTimeMillis()
         lastError = "none"
         audioPackets.set(0)
@@ -247,7 +346,7 @@ class MainActivity : Activity() {
         imagePackets.set(0)
         imageFailures.set(0)
         Log.i(TAG, "startAll")
-        connectAudioWebSocket()
+        endpointController.start(explicitUrl)
         startAudioCapture()
         scheduleCameraStart(1_200)
     }
@@ -265,7 +364,11 @@ class MainActivity : Activity() {
     private fun stopAll() {
         if (!running) return
         running = false
+        captureGeneration.incrementAndGet()
+        cameraRestartPending.set(false)
         Log.i(TAG, "stopAll")
+        endpointController.stop()
+        imageConnection?.disconnect()
         stopAudioCapture()
         closeAudioWebSocket()
         stopCameraCapture()
@@ -275,8 +378,10 @@ class MainActivity : Activity() {
 
     private fun connectAudioWebSocket() {
         if (!running) return
-        val urls = pcWsUrls()
-        val url = urls[audioUrlIndex % urls.size]
+        val endpoint = currentEndpoint ?: return
+        closeAudioWebSocket()
+        val token = webSocketGeneration
+        val url = endpoint.websocketUrl
         audioWsUrlText = url
         audioStatus = "ws connecting"
         Log.i(TAG, "audio WS connecting $url")
@@ -284,54 +389,67 @@ class MainActivity : Activity() {
             url,
             object : SimpleBinaryWebSocket.Listener {
                 override fun onOpen() {
+                    mainHandler.post {
+                    if (!running || token != webSocketGeneration) return@post
                     wsOpen = true
                     reconnectDelayMs = 1_000L
                     audioStatus = "ws connected"
                     lastError = "none"
                     Log.i(TAG, "audio WS connected $url")
+                    }
                 }
 
                 override fun onClosed(reason: String) {
+                    mainHandler.post {
+                    if (!running || token != webSocketGeneration) return@post
                     wsOpen = false
                     audioStatus = "ws closed"
                     Log.w(TAG, "audio WS closed url=$url reason=$reason")
                     scheduleReconnect()
+                    }
                 }
 
                 override fun onFailure(error: Throwable) {
+                    mainHandler.post {
+                    if (!running || token != webSocketGeneration) return@post
                     wsOpen = false
                     audioStatus = "ws failed"
-                    audioUrlIndex = (audioUrlIndex + 1) % urls.size
                     lastError = "audio ws ${error.javaClass.simpleName}: ${error.message}"
-                    Log.e(TAG, "audio WS failed url=$url; next=${urls[audioUrlIndex % urls.size]}", error)
+                    Log.e(TAG, "audio WS failed url=$url", error)
                     scheduleReconnect()
+                    endpointController.retry()
+                    }
                 }
             },
+            socketFactory = endpoint.network?.socketFactory,
         )
         audioWs = ws
         ws.start()
     }
 
-    private fun pcBaseUrls(): List<String> =
-        listOf(pcBaseUrl, USB_REVERSE_BASE_URL).distinct()
-
-    private fun pcWsUrls(): List<String> =
-        listOf(pcWsUrl, USB_REVERSE_WS_URL).distinct()
-
     private fun scheduleReconnect() {
         if (!running) return
+        closeAudioWebSocket()
         val delay = reconnectDelayMs
-        reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(5_000L)
-        mainHandler.postDelayed({ connectAudioWebSocket() }, delay)
+        reconnectDelayMs = ConnectionPolicy.nextDelay(reconnectDelayMs)
+        mainHandler.postDelayed(reconnectTask, delay)
     }
 
     private fun closeAudioWebSocket() {
+        mainHandler.removeCallbacks(reconnectTask)
+        webSocketGeneration++
         wsOpen = false
         audioWs?.close()
         audioWs = null
     }
 
     private fun startAudioCapture() {
+        if (!running) return
+        if (audioThread?.isAlive == true) {
+            mainHandler.postDelayed({ startAudioCapture() }, 200)
+            return
+        }
+        val token = captureGeneration.get()
         audioThread = Thread({
             val recorder = createAudioRecord()
             if (recorder == null) {
@@ -341,10 +459,12 @@ class MainActivity : Activity() {
             val buf = ByteArray(CHUNK_BYTES)
             var lastLog = System.currentTimeMillis()
             try {
+                if (!running || token != captureGeneration.get()) return@Thread
+                activeRecorder = recorder
                 recorder.startRecording()
                 audioStatus = "recording"
                 Log.i(TAG, "AudioRecord started")
-                while (running) {
+                while (running && token == captureGeneration.get()) {
                     val n = recorder.read(buf, 0, buf.size)
                     if (n <= 0) {
                         audioDrops.incrementAndGet()
@@ -366,9 +486,15 @@ class MainActivity : Activity() {
                     }
                     val now = System.currentTimeMillis()
                     if (now - lastLog >= 1_000L) {
+                        // Observe this recorder only. An unavailable configuration stays unknown;
+                        // this diagnostic does not alter the audio source, routing or samples.
+                        // Rokid can report true even with audible PCM, so do not infer silence from it.
+                        val silenced = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            runCatching { recorder.activeRecordingConfiguration?.isClientSilenced }.getOrNull()
+                        } else null
                         Log.i(
                             TAG,
-                            "audio source=$audioSourceText pkt=${audioPackets.get()} drop=${audioDrops.get()} rms=${fmt(lastRms)} peak=$lastPeak nonzero=$lastNonZero wsOpen=$wsOpen",
+                            "audio source=$audioSourceText pkt=${audioPackets.get()} drop=${audioDrops.get()} rms=${fmt(lastRms)} peak=$lastPeak nonzero=$lastNonZero wsOpen=$wsOpen silenced=${silenced?.toString() ?: "unknown"}",
                         )
                         lastLog = now
                     }
@@ -382,6 +508,9 @@ class MainActivity : Activity() {
                 } catch (_: Throwable) {
                 }
                 recorder.release()
+                if (activeRecorder === recorder) {
+                    activeRecorder = null
+                }
                 Log.i(TAG, "AudioRecord stopped")
             }
         }, "rokid-audio").also { it.start() }
@@ -440,12 +569,15 @@ class MainActivity : Activity() {
         }
 
     private fun stopAudioCapture() {
+        try { activeRecorder?.stop() } catch (_: Exception) { }
+        audioThread?.interrupt()
         audioThread?.join(700)
-        audioThread = null
+        if (audioThread?.isAlive != true) audioThread = null
     }
 
     private fun startCameraCapture() {
         if (cameraThread != null || cameraDevice != null || imageReader != null) return
+        val token = cameraGeneration.incrementAndGet()
         cameraThread = HandlerThread("rokid-camera").also { it.start() }
         cameraHandler = Handler(cameraThread!!.looper)
         val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -466,7 +598,11 @@ class MainActivity : Activity() {
                 2,
             ).also { reader ->
                 reader.setOnImageAvailableListener({ r ->
-                    val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
+                    val image = runCatching { r.acquireLatestImage() }.getOrNull() ?: return@setOnImageAvailableListener
+                    if (!running || token != cameraGeneration.get()) {
+                        image.close()
+                        return@setOnImageAvailableListener
+                    }
                     try {
                         val buffer: ByteBuffer = image.planes[0].buffer
                         val bytes = ByteArray(buffer.remaining())
@@ -494,11 +630,13 @@ class MainActivity : Activity() {
                 selection.cameraId,
                 object : CameraDevice.StateCallback() {
                     override fun onOpened(camera: CameraDevice) {
+                        if (!running || token != cameraGeneration.get()) { camera.close(); return }
                         cameraDevice = camera
                         createSession(camera)
                     }
 
                     override fun onDisconnected(camera: CameraDevice) {
+                        if (token != cameraGeneration.get()) { camera.close(); return }
                         cameraStatus = "camera disconnected"
                         lastError = cameraStatus
                         Log.w(TAG, cameraStatus)
@@ -507,6 +645,7 @@ class MainActivity : Activity() {
                     }
 
                     override fun onError(camera: CameraDevice, error: Int) {
+                        if (token != cameraGeneration.get()) { camera.close(); return }
                         cameraStatus = "camera error $error"
                         lastError = cameraStatus
                         Log.e(TAG, cameraStatus)
@@ -514,7 +653,7 @@ class MainActivity : Activity() {
                         restartCameraCapture(cameraStatus)
                     }
                 },
-                cameraHandler,
+                mainHandler,
             )
         } catch (t: Throwable) {
             cameraStatus = "camera failed"
@@ -536,6 +675,7 @@ class MainActivity : Activity() {
                 listOf(preview, jpegSurface),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
+                        if (!running || camera !== cameraDevice) { session.close(); return }
                         captureSession = session
                         cameraStatus = "camera ready $imageSizeText"
                         Log.i(TAG, cameraStatus)
@@ -544,12 +684,13 @@ class MainActivity : Activity() {
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
+                        if (!running || camera !== cameraDevice) { session.close(); return }
                         cameraStatus = "session configure failed"
                         lastError = cameraStatus
                         Log.e(TAG, cameraStatus)
                     }
                 },
-                cameraHandler,
+                mainHandler,
             )
         } catch (t: Throwable) {
             lastError = "session ${t.javaClass.simpleName}: ${t.message}"
@@ -631,11 +772,17 @@ class MainActivity : Activity() {
 
     private fun restartCameraCapture(reason: String, delayMs: Long = 800L) {
         if (!running) return
+        val token = captureGeneration.get()
+        val cameraToken = cameraGeneration.get()
         if (!cameraRestartPending.compareAndSet(false, true)) return
         cameraStatus = "camera restarting"
         lastError = "camera restart: $reason"
         Log.w(TAG, "camera restart requested: $reason")
         mainHandler.post {
+            if (!running || token != captureGeneration.get() || cameraToken != cameraGeneration.get()) {
+                cameraRestartPending.set(false)
+                return@post
+            }
             try {
                 stopCameraCapture()
             } catch (t: Throwable) {
@@ -643,7 +790,7 @@ class MainActivity : Activity() {
             }
             mainHandler.postDelayed({
                 cameraRestartPending.set(false)
-                if (running) {
+                if (running && token == captureGeneration.get()) {
                     Log.i(TAG, "camera restart now")
                     startCameraCapture()
                 }
@@ -757,57 +904,47 @@ class MainActivity : Activity() {
 
     private fun uploadJpeg(jpeg: ByteArray) {
         if (!running) return
-        if (!imageUploadInFlight.compareAndSet(false, true)) {
-            imageFailures.incrementAndGet()
-            Log.w(TAG, "drop image upload: previous POST still in flight")
-            return
-        }
+        val endpoint = currentEndpoint ?: return
+        val token = captureGeneration.get()
+        if (!imageUploadInFlight.compareAndSet(false, true)) return
         Thread({
-            val prepareStart = System.currentTimeMillis()
-            val downsampledJpeg = maybeDownsampleJpegForUpload(jpeg)
-            val postJpeg = if (ENHANCE_IMAGE_FOR_UPLOAD) enhanceJpegForModel(downsampledJpeg) else downsampledJpeg
-            val prepareMs = System.currentTimeMillis() - prepareStart
-            var posted = false
-            var lastFailure: String? = null
-            for (baseUrl in pcBaseUrls()) {
-                imagePostBaseText = baseUrl
-                try {
-                val postStart = System.currentTimeMillis()
-                val conn = (URL("$baseUrl/rokid/image").openConnection() as HttpURLConnection).apply {
+            var conn: HttpURLConnection? = null
+            try {
+                if (!running || token != captureGeneration.get() || endpoint != currentEndpoint) return@Thread
+                val downsampledJpeg = maybeDownsampleJpegForUpload(jpeg)
+                val postJpeg = if (ENHANCE_IMAGE_FOR_UPLOAD) enhanceJpegForModel(downsampledJpeg) else downsampledJpeg
+                conn = endpoint.connection("/rokid/image").apply {
                     requestMethod = "POST"
                     connectTimeout = 1_500
                     readTimeout = 4_000
+                    instanceFollowRedirects = false
                     doOutput = true
                     setRequestProperty("Content-Type", "image/jpeg")
-                    setRequestProperty("Content-Length", postJpeg.size.toString())
+                    setFixedLengthStreamingMode(postJpeg.size)
                 }
+                imageConnection = conn
+                if (!running || token != captureGeneration.get() || endpoint != currentEndpoint) return@Thread
+                imagePostBaseText = endpoint.baseUrl
                 conn.outputStream.use { it.write(postJpeg) }
                 val code = conn.responseCode
-                conn.disconnect()
-                if (code in 200..299) {
+                if (code !in 200..299) throw java.io.IOException("HTTP $code")
+                if (running && token == captureGeneration.get() && endpoint == currentEndpoint) {
                     val count = imagePackets.incrementAndGet()
                     cameraStatus = "image ok $imageSizeText"
-                    Log.i(
-                        TAG,
-                        "image POST ok base=$baseUrl count=$count bytes=${postJpeg.size} prepareMs=$prepareMs postMs=${System.currentTimeMillis() - postStart}",
-                    )
-                    posted = true
-                    break
-                } else {
-                    lastFailure = "HTTP $code at $baseUrl"
-                    Log.e(TAG, "image POST HTTP $code base=$baseUrl")
+                    Log.i(TAG, "image POST ok base=${endpoint.baseUrl} count=$count bytes=${postJpeg.size}")
                 }
-                } catch (t: Throwable) {
-                    lastFailure = "${t.javaClass.simpleName}: ${t.message} at $baseUrl"
-                    Log.w(TAG, "image POST failed base=$baseUrl bytes=${postJpeg.size}", t)
+            } catch (t: Exception) {
+                if (running && token == captureGeneration.get() && endpoint == currentEndpoint) {
+                    imageFailures.incrementAndGet()
+                    lastError = "image post ${t.javaClass.simpleName}: ${t.message}"
+                    cameraStatus = "image post failed"
+                    mainHandler.post { endpointController.retry() }
                 }
+            } finally {
+                conn?.disconnect()
+                if (imageConnection === conn) imageConnection = null
+                imageUploadInFlight.set(false)
             }
-            if (!posted) {
-                imageFailures.incrementAndGet()
-                lastError = "image post failed: $lastFailure"
-                cameraStatus = "image post failed"
-            }
-            imageUploadInFlight.set(false)
         }, "rokid-image-post").start()
     }
 
@@ -900,6 +1037,7 @@ class MainActivity : Activity() {
     }
 
     private fun stopCameraCapture() {
+        cameraGeneration.incrementAndGet()
         cameraHandler?.removeCallbacksAndMessages(null)
         try {
             captureSession?.close()
@@ -1004,20 +1142,14 @@ class MainActivity : Activity() {
     }
 
     private fun updateHud() {
-        val up = if (running) (System.currentTimeMillis() - startMs) / 1000 else 0
-        val mode = if (running) "RUNNING" else "STOPPED"
-        hud.text = """
-            OpenGlass Rokid Sensor
-            MODE: $mode
-            PC: img=$imagePostBaseText audio=$audioWsUrlText
-            AUDIO: $audioStatus source=$audioSourceText wsOpen=$wsOpen pkt=${audioPackets.get()} drop=${audioDrops.get()} rms=${fmt(lastRms)} peak=$lastPeak nz=$lastNonZero
-            IMAGE: $cameraStatus pkt=${imagePackets.get()} fail=${imageFailures.get()} size=$imageSizeText hiResDownsample=$HIGH_RES_CAPTURE_FOR_DOWNSAMPLE
-            UP: ${up}s
-            LAST ERROR: $lastError
-
-            Enter/DPAD: start-stop
-            Back: stop / exit
-        """.trimIndent()
+        val status = when {
+            !hasPermissions() -> "请允许相机和麦克风"
+            !running -> "OpenGlass · 已暂停"
+            currentEndpoint == null || !wsOpen -> "OpenGlass · 连接中"
+            else -> "OpenGlass · 已连接"
+        }
+        // Keep the glasses display still; diagnostics remain in logcat.
+        if (hud.text.toString() != status) hud.text = status
     }
 
     private data class AudioStats(val rms: Double, val peak: Int, val nonZero: Int)

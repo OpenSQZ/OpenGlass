@@ -1,0 +1,117 @@
+name: Build OpenGlass iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/rokid-iphone-minicpm]
+    paths: ['ios/**', '.github/workflows/ios-ipa.yml']
+  pull_request:
+    paths: ['ios/**', '.github/workflows/ios-ipa.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Xcode 26.1.1 is listed on macos-15 and is the upstream-verified version:
+    # https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.1.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Check build tools
+        run: |
+          xcodebuild -version
+          cmake --version
+          python3 --version
+      - name: Test project preparation
+        run: python3 -m unittest discover -s ios/tests -p 'test_prepare*.py' -v
+      - name: Test Rokid wire protocol
+        run: bash ios/tests/run_protocol_tests.sh
+      - name: Test automatic voice conversation lifecycle
+        run: bash ios/tests/run_voice_loop_tests.sh
+      - name: Test Windows USB relay without devices
+        run: python3 -m unittest discover -s ios/windows -p 'test_usb_relay.py' -v
+      - name: Prepare pinned upstream and OpenGlass sources
+        run: |
+          python3 ios/scripts/prepare_upstream.py
+          plutil -lint tmp/MiniCPM-V-Apps/MiniCPM-V-demo.xcodeproj/project.pbxproj
+          plutil -lint tmp/MiniCPM-V-Apps/MiniCPM-V-demo/Info.plist
+          plutil -lint tmp/MiniCPM-V-Apps/MiniCPM-V-demo/MiniCPM-V-demo.entitlements
+      - name: Restore pinned inference framework and Swift packages
+        id: restore_build_cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            tmp/MiniCPM-V-Apps/MiniCPM-V-demo/thirdparty/llama.xcframework
+            tmp/MiniCPM-V-Apps/MiniCPM-V-demo/thirdparty/.openglass-framework-key
+            tmp/ios-build/SourcePackages
+          key: ios-device-${{ runner.os }}-${{ runner.arch }}-xcode26.1.1-${{ hashFiles('ios/upstream-lock.json', 'ios/scripts/build_ipa.sh') }}
+      - name: Build unsigned device IPA
+        run: bash ios/scripts/build_ipa.sh
+      - name: Validate completed inference framework for caching
+        id: framework_cache_ready
+        if: ${{ !cancelled() && steps.restore_build_cache.outcome == 'success' && steps.restore_build_cache.outputs.cache-hit != 'true' }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, os, plistlib, subprocess
+          from pathlib import Path
+          root = Path.cwd()
+          thirdparty = root / 'tmp/MiniCPM-V-Apps/MiniCPM-V-demo/thirdparty'
+          framework = thirdparty / 'llama.xcframework'
+          stamp = thirdparty / '.openglass-framework-key'
+          valid = False
+          if stamp.is_file() and (framework / 'Info.plist').is_file():
+              payload = (root / 'ios/upstream-lock.json').read_bytes()
+              payload += subprocess.check_output(['xcodebuild', '-version'])
+              payload += subprocess.check_output(['uname', '-m'])
+              expected = hashlib.sha256(payload).hexdigest()
+              if stamp.read_text().strip() == expected:
+                  info = plistlib.loads((framework / 'Info.plist').read_bytes())
+                  for library in info.get('AvailableLibraries', []):
+                      if (library.get('SupportedPlatform') == 'ios'
+                              and not library.get('SupportedPlatformVariant')
+                              and 'arm64' in library.get('SupportedArchitectures', [])):
+                          binary = framework / library['LibraryIdentifier'] / library['LibraryPath'] / 'llama'
+                          if binary.is_file() and binary.resolve().is_relative_to(framework.resolve()):
+                              valid = subprocess.run(['lipo', '-verify_arch', 'arm64', str(binary)]).returncode == 0
+                          break
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"valid={'true' if valid else 'false'}\n")
+          print('Completed inference framework cacheable:', valid)
+          PY
+      - name: Save completed framework even if the app build failed
+        if: ${{ !cancelled() && steps.framework_cache_ready.outputs.valid == 'true' && steps.restore_build_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            tmp/MiniCPM-V-Apps/MiniCPM-V-demo/thirdparty/llama.xcframework
+            tmp/MiniCPM-V-Apps/MiniCPM-V-demo/thirdparty/.openglass-framework-key
+            tmp/ios-build/SourcePackages
+          key: ${{ steps.restore_build_cache.outputs.cache-primary-key }}
+      - name: Upload IPA for Windows signing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: OpenGlass-iOS-unsigned-${{ github.run_number }}
+          path: |
+            artifacts/OpenGlass-1.0.ipa
+            artifacts/build-info.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: OpenGlass-iOS-build-logs-${{ github.run_number }}
+          path: tmp/ios-build/*.log
+          if-no-files-found: ignore
+          retention-days: 7

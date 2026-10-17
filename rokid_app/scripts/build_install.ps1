@@ -2,7 +2,8 @@ param(
     [switch]$Install,
     [string]$Serial = "",
     [string]$Adb = $env:ROKID_ADB,
-    [string]$Sdk = $env:ANDROID_HOME
+    [string]$Sdk = $env:ANDROID_HOME,
+    [ValidateSet('Debug', 'Wifi')][string]$Variant = 'Debug'
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,12 +36,13 @@ if ($Install) {
 
 Push-Location $projectRoot
 try {
-    & .\gradlew.bat :app:assembleDebug
+    & .\gradlew.bat ":app:assemble$Variant"
     if ($LASTEXITCODE -ne 0) { throw "Gradle build failed; nothing installed." }
 } finally {
     Pop-Location
 }
-$apk = Join-Path $projectRoot "app\build\outputs\apk\debug\app-debug.apk"
+$variantFolder = $Variant.ToLowerInvariant()
+$apk = Join-Path $projectRoot "app\build\outputs\apk\$variantFolder\app-$variantFolder.apk"
 if (-not (Test-Path -LiteralPath $apk)) { throw "Build did not produce the expected APK." }
 Write-Host "Built: $apk"
 if ($Install) {
@@ -50,4 +52,4 @@ if ($Install) {
     }
     Write-Host "Installed. Allow Camera and Microphone on the glasses when prompted."
 }
-Write-Host "Configure runtime/openglass_omni/runtime.local.json, then start glasses_panel.py. No build-time PC IP is needed."
+Write-Host "For iPhone: join its hotspot/shared Wi-Fi and open both OpenGlass apps (Auto mode). For PC: configure runtime.local.json and start glasses_panel.py."
