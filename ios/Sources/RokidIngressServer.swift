@@ -4,6 +4,18 @@ import Network
 /// Foreground-only local receiver for OpenGlassRokidSensor 0.1.3.
 /// Call start/stop on the main queue; all callbacks are delivered on that queue.
 final class RokidIngressServer {
+    // A stable, non-personal name lets the glasses find the same phone after
+    // DHCP changes. Never advertise the user's device name or account.
+    static let serviceType = "_openglass._tcp"
+    static let serviceName: String = {
+        let key = "OpenGlass.receiverServiceName"
+        if let saved = UserDefaults.standard.string(forKey: key),
+           saved.hasPrefix("OpenGlass-"), saved.count == 18 { return saved }
+        let name = "OpenGlass-" + UUID().uuidString.prefix(8)
+        UserDefaults.standard.set(name, forKey: key)
+        return name
+    }()
+
     var onImage: ((Data) -> Void)?
     var onAudio: ((Data) -> Void)?
     var onStatus: ((String) -> Void)?
@@ -16,6 +28,8 @@ final class RokidIngressServer {
     private var audioClient: UUID?
     private var imageCount = 0
     private var audioPacketCount = 0
+    private var conversationPhase = "waiting"
+    private var completedTurns = 0
     private var epoch = UUID()
     // Read/written only on queue. epoch belongs to the main queue and only
     // filters UI callbacks; this also prevents an old listener accepting work.
@@ -30,6 +44,7 @@ final class RokidIngressServer {
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
         let newListener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
+        newListener.service = NWListener.Service(name: Self.serviceName, type: Self.serviceType)
         stop()
         let generation = UUID()
         epoch = generation
@@ -58,7 +73,7 @@ final class RokidIngressServer {
             self.clients[client.id] = client
             client.healthJSON = { [weak self] in
                 guard let self else { return "{}" }
-                return "{\"service\":\"openglass-ios\",\"protocol\":1,\"image_count\":\(self.imageCount),\"audio_packets_in\":\(self.audioPacketCount),\"audio_connected\":\(self.audioClient != nil)}"
+                return "{\"service\":\"openglass-ios\",\"protocol\":1,\"receiver_name\":\"\(Self.serviceName)\",\"image_count\":\(self.imageCount),\"audio_packets_in\":\(self.audioPacketCount),\"audio_connected\":\(self.audioClient != nil),\"conversation_phase\":\"\(self.conversationPhase)\",\"completed_turns\":\(self.completedTurns)}"
             }
             client.onImage = { [weak self] data in
                 guard let self else { return }
@@ -108,6 +123,19 @@ final class RokidIngressServer {
         newListener.start(queue: queue)
     }
 
+    /// Only operational metadata is exposed; recognized speech and answers
+    /// never appear in network diagnostics.
+    func setConversationStatus(phase: String, completedTurns: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        let safePhase = ["paused", "listening", "thinking", "speaking", "waiting"].contains(phase) ? phase : "waiting"
+        let generation = epoch
+        queue.async { [weak self] in
+            guard let self, self.servingGeneration == generation else { return }
+            self.conversationPhase = safePhase
+            self.completedTurns = max(0, completedTurns)
+        }
+    }
+
     func stop() {
         dispatchPrecondition(condition: .onQueue(.main))
         epoch = UUID()
@@ -120,6 +148,8 @@ final class RokidIngressServer {
             audioClient = nil
             imageCount = 0
             audioPacketCount = 0
+            conversationPhase = "waiting"
+            completedTurns = 0
             imageDeliveryInFlight = false
             pendingAudioBytes = 0
             closing.forEach { $0.close() }

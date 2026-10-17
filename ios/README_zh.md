@@ -6,7 +6,17 @@
 
 ## 运行路径
 
-先使用双 USB 路径，眼镜 Wi-Fi 可以保持关闭：
+无线版本使用 Rokid 采集端 **0.2.0**。眼镜加入 iPhone 个人热点（推荐），或与 iPhone 加入同一可互通的 Wi-Fi：
+
+```text
+Rokid 摄像头 / 麦克风 → Wi-Fi → iPhone OpenGlass :18080
+  → iPhone 离线 ASR → MiniCPM-V 4.6 → iPhone TTS
+  → 自动恢复听音，开始下一轮（每轮清空 KV cache）
+```
+
+这条路径不需要 Windows 转发；两端连接正常后可拔掉 USB。iPhone App 需要保持前台。首次配置热点 / Wi-Fi、权限和安装更新仍需操作设备。
+
+双 USB 路径保留为回退方案，眼镜 Wi-Fi 可以保持关闭：
 
 ```text
 Rokid 摄像头 / 麦克风
@@ -24,7 +34,7 @@ Windows 在这个路径只转发数据，不运行视觉模型。拔掉任一 US
 Rokid → HTTP JPEG + WebSocket PCM → iPhone 局域网地址:18080
 ```
 
-两条路径都要求眼镜本身支持 Android APK、Camera/Mic 权限和 ADB。不能仅根据“Rokid”品牌判断所有型号兼容。原采集 APK 无需改协议；当前采样是 JPEG 约 1 fps、16 kHz 单声道 PCM16LE。模型按问题读取最新画面，不是对每个视频帧连续推理。
+眼镜本身需要支持 Android APK 和 Camera/Mic 权限；ADB 用于 Windows 安装与可选的首次配置，无线运行不需要 ADB。不能仅根据“Rokid”品牌判断所有型号兼容。0.2.0 延续 JPEG / PCM 协议，新增自动寻找手机和统一的断线重连；当前采样是 JPEG 约 1 fps、16 kHz 单声道 PCM16LE。模型按问题读取最新画面，不是对每个视频帧连续推理。
 
 ## 1. 准备 Windows 与手机
 
@@ -110,8 +120,8 @@ CI 产物不能直接作为已签名 App 安装。`ideviceinstaller`、`pymobile
 
 1. 打开新 **OpenGlass**，进入右上角“模型下载”。
 2. 在 MiniCPM-V 4.6 下载页完成 **LLM 与 VPM 两个 GGUF 文件**。这个 App 有独立沙盒；其他 TestFlight/App 已下载的模型不会自动出现在这里。下载与首次资源准备需要网络。
-3. 回到主界面，点“启动接收”，等待模型就绪。初次验证可先关闭“Rokid 离线语音提问”，用文字问题排除语音权限影响。
-4. 保持 OpenGlass 在前台。进入后台会停止接收和语音；返回后需要再次点“启动接收”。本实现不保证锁屏长期运行。
+3. 模型已准备好时，打开 App 会自动启动接收并加载模型。首次刚从下载页返回时点一次“启动接收”。初次验证可先关闭“Rokid 离线语音提问”，用文字问题排除语音权限影响。
+4. 保持 OpenGlass 在前台。进入后台会挂起接收和语音；返回后自动恢复此前运行状态。主动点“停止接收”或“暂停语音”后不会自动重启。本实现不保证锁屏长期运行。
 
 模型文件不能混用 MiniCPM-o 4.5、其他尺寸或未经验证的 GGUF 转换。加载会检查文件存在、GGUF 头和锁定上游对应的 MD5；首次完整校验在后台进行，后续复用文件大小/修改时间匹配的校验记录。文件名与预期校验值由锁定上游的 MiniCPM-V 4.6 常量决定；模型通过校验仍需真机推理验证。
 
@@ -124,6 +134,14 @@ CI 产物不能直接作为已签名 App 安装。`ideviceinstaller`、`pymobile
   -Adb "$env:USERPROFILE\Downloads\platform-tools\adb.exe" `
   -Python .\ios\windows\.venv\Scripts\python.exe
 ```
+
+Windows PowerShell 若提示“在此系统上禁止运行脚本 / PSSecurityException”，可仅为这次启动允许本地脚本，使用下面的命令；把路径替换为实际仓库绝对路径。`-ExecutionPolicy RemoteSigned` 只影响新进程，不永久修改用户或系统设置，也不会覆盖组织的组策略：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File 'C:\path\to\OpenGlass\ios\windows\start-usb-relay.ps1'
+```
+
+本项目生成或通过 Git 检出的本地脚本可以使用这条命令。若仍报执行策略错误，先检查 `Get-ExecutionPolicy -List` 和文件的来源标记，不全局降低策略。作用范围见 [Microsoft 官方执行策略说明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-5.1)。
 
 仅连接一副授权眼镜和一台 iPhone 时自动选择；多设备时显式加 `-Serial '<眼镜USB序列号>'`、`-IPhoneUdid '<iPhone UDID>'`。用下列只读命令查询 iPhone USB UDID：
 
@@ -152,9 +170,23 @@ Invoke-RestMethod http://127.0.0.1:18080/health
 
 底层使用官方 [pymobiledevice3 v11.32.0 TCP forwarder](https://github.com/doronz88/pymobiledevice3/blob/v11.32.0/pymobiledevice3/tcp_forwarder.py)，限定 USB。其 CLI 对应 `usbmux forward <Windows端口> <iPhone端口>`，这里的包装脚本另外处理设备选择、健康检查和清理。普通 App TCP 转发不使用 iOS 开发调试隧道，不要求将 Apple 配对文件上传到任何服务。
 
-## 5B. Wi-Fi 直连（USB 路径通过后）
+## 5B. Wi-Fi 直连（推荐 iPhone 个人热点）
 
-在官方 Rokid AI App/设备设置中先把眼镜和 iPhone 放到同一可互通 Wi-Fi。确认网络没有客户端隔离。在 iPhone OpenGlass 点“刷新地址”，取其显示的局域网 IPv4 地址。眼镜暂时保留 USB，仅用于设置采集地址：
+先安装新 iOS IPA 和 Rokid 0.2.0 APK。iOS 使用同一 Apple 账号、同一 bundle ID 覆盖安装，保留现有模型；无需卸载或重新下载模型。
+
+1. iPhone“设置 → 个人热点 → 允许其他人加入”。眼镜找不到热点时可开启“最大兼容性”。首次连接时停留在热点页面，直到眼镜已加入。具体开关见 [Apple 个人热点说明](https://support.apple.com/zh-cn/111785)。热点依赖运营商支持；它分享的是蜂窝网络，不是酒店 Wi-Fi 的中继。
+2. 通过 Rokid 官方 App / 设备的 Wi-Fi 设置，让眼镜加入这个热点；密码仅在设备设置内输入。OpenGlass 不修改 Wi-Fi 密码和系统网络。
+3. iPhone 打开 OpenGlass，允许“本地网络”和语音识别；已有模型时自动启动接收，等待模型就绪即可。页面显示固定的 `OpenGlass-xxxxxxxx` 接收名称。请保持“Rokid 离线语音提问”和“朗读回答”开启。
+4. 启动眼镜 OpenGlassRokidSensor，使用“自动连接”。眼镜寻找 `_openglass._tcp` 服务，并探测当前 Wi-Fi 网关的 `:18080/health`；确认是 OpenGlass iOS 接收端后才发送音视频。地址变化后会重新发现，不把热点地址写死。
+5. 确认手机出现新画面、自动语音状态后，拔掉两根 USB，等待十秒并连续问三个问题。回答播完后再说下一个问题，不需要点“结束语句”或“用最新画面提问”。
+
+眼镜暂留 USB 时，可在 Windows 手动切到自动发现模式；这条命令只做一次配置与启动，不是数据中继：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File 'C:\path\to\OpenGlass\ios\windows\configure-rokid.ps1' -AutoDiscover
+```
+
+普通 Wi-Fi / 酒店 Wi-Fi 也可用：将两台设备加入同一网络。网络必须允许设备互访；若酒店启用了客户端隔离，或眼镜无法完成网页认证，应改用个人热点。Bonjour 被阻止但设备仍能直连时，可从 iPhone 页面取 IPv4 地址手动指定：
 
 ```powershell
 .\ios\windows\configure-rokid.ps1 `
@@ -162,17 +194,19 @@ Invoke-RestMethod http://127.0.0.1:18080/health
   -Adb "$env:USERPROFILE\Downloads\platform-tools\adb.exe"
 ```
 
-替换示例 IP。此脚本不替你打开/修改眼镜 Wi-Fi，只检测手机接收服务并重启眼镜采集 App。确认画面/音频计数增长后再拔掉眼镜 USB。此时即使 Windows 关闭，中间没有 Windows 转发；iPhone 仍需前台运行。
+替换示例 IP。手动地址模式用于明确指定接收设备，换网后可重新选“自动连接”。脚本不打开/修改眼镜 Wi-Fi。若 Windows 未加入手机所在网络而眼镜已加入，Windows 的接收端检查可能失败；可使用自动发现，或确认原因后加 `-SkipReceiverCheck`。
 
-iPhone个人热点、眼镜厂商固件对 Wi-Fi/蓝牙共存的影响要另行真机验证，不能将同一 Wi-Fi 成功等同于热点成功。换网或手机 IP 改变后重跑地址配置。若 Windows 暂时不能访问手机但眼镜实际可达，只有明确理解原因时才用 `-SkipReceiverCheck`；它会跳过启动前的手机健康检查。
+无线连通性须在这副眼镜和这台 iPhone 上实测，不能把“已编译”当成“热点已跑通”。检查时必须拔掉 USB，并确认新画面仍在更新，防止误把原 USB 链路当成无线成功。
 
 ## 6. 验证对话和音频
 
 先确认预览方向正确；主界面可选0/90/180/270°旋转，默认270°沿用原电脑路径。输入“我面前有什么？”后点“用最新画面提问”，验证手机能读到当前眼镜画面并生成回答。
 
-然后启用“Rokid 离线语音提问”，选择中文或英文，允许系统语音识别权限。输入仍来自眼镜的 PCM 流，App不打开 iPhone 麦克风。Apple 设备端识别资源可用时执行离线识别；不可用会显示错误并保留文字提问，不偷偷改走云端。说完停顿或点“结束语句”后，识别文本与当前图片送给 MiniCPM-V 4.6。回答由系统 TTS 朗读；可在 iPhone 控制中心选择已配对的眼镜作为声音输出，前提是该型号支持相应蓝牙音频功能。
+然后启用“Rokid 离线语音提问”，选择中文或英文，允许系统语音识别权限。输入仍来自眼镜的 PCM 流，App 不打开 iPhone 麦克风。Apple 设备端识别资源可用时执行离线识别；不可用会显示错误并保留文字提问，不改走云端。说完停顿后，识别文本与当前图片自动送给 MiniCPM-V 4.6。回答由系统 TTS 朗读，结束后自动恢复听音；每轮推理前清空 KV cache，不保留此前问题或图片。可在 iPhone 控制中心选择已配对的眼镜作为声音输出，前提是该型号支持相应蓝牙音频功能。
 
-当前是“听问题 → 看图推理 → 朗读回答”的分轮交互；推理/播报时暂停送入识别的麦克风片段，避免回答被自己重新听见。它不提供 MiniCPM-o 的原生全双工音频模型，也不承诺打断播报时继续实时看图。
+自动循环为“听问题 → 看图推理 → 朗读回答 → 等待回声消退 → 继续听问题”。推理/播报时丢弃输入语音，不积压旧问题；空白识别、短暂识别错误、音频重连与新画面恢复均由状态机处理。权限拒绝、离线语言资源缺失、模型错误仍会明确显示，主动暂停必须由用户恢复。这是逐轮交互，暂不支持边播报边打断。
+
+`/health` 的 `conversation_phase` 显示 `waiting/listening/thinking/speaking/paused`，`completed_turns` 记录本次接收会话中完成的回答数；不返回识别文本或回答正文。测试至少三轮，并留空静音约30秒后再提问，确认没有空问题、重复回答或需要手动唤醒。
 
 ## 排障
 
@@ -185,14 +219,14 @@ iPhone个人热点、眼镜厂商固件对 Wi-Fi/蓝牙共存的影响要另行�
 | 画面到达但模型未就绪 | 两个正确的4.6模型是否下载完成、磁盘空间、模型加载报错；其他App模型沙盒不共享 |
 | 有文本回答但没声音 | “朗读回答”开关、iPhone音量/音频路由、蓝牙配对；看界面实际输出设备 |
 | 语音不可用但文字正常 | 系统语音识别权限与该语言的设备端资源；该功能不向云识别降级 |
-| 切后台后断流 | 预期行为；回前台重启接收与语音 |
+| 切后台后断流 | 预期行为；回前台自动恢复此前运行意图；主动停止不会自动恢复 |
 | 免费签名几天后点不开 | 直接侧载方式每7天用AltServer重签；AltStore管理方式查看剩余天数并刷新。不要先删除App及模型数据 |
 
 ## 验证记录
 
 - 本地脚本检查：PowerShell语法解析通过；USB中继使用伪设备测试了端口占用、已有reverse、并发映射冲突、接收端不可达、成功启动与只清理自身映射等情况。
 - [CI运行38890873970](https://github.com/OpenSQZ/OpenGlass/actions/runs/38890873970)成功，源提交为 `c11c87b39b5798f8b4218d3a47d5b6cc68e56091`：1399项wire protocol检查、7项工程准备测试、7项USB中继测试通过，并生成未签名的 `OpenGlass-1.0.ipa`（artifact `OpenGlass-iOS-unsigned-3`）。IPA SHA256 为 `DA76A28A87195C43EA80ECF11366724180480B5D6502DEA27A4D1AF800AD00DB`。
-- 现场设备识别为 `iPhone18,2`、iOS `26.6.2`，已完成 Windows USB 配对。新版 `1.0` / build `3` 已通过本机认证签名并安装；系统返回安装成功，安装列表再次确认。两个对应 4.6 的模型已校验源文件 MD5 并通过 USB 导入，手机端文件大小一致；首次加载仍由 App 完整校验。眼镜图像、ASR、模型回答与 TTS 的端到端结果仍待真机验证。
+- 现场设备识别为 `iPhone18,2`、iOS `26.6.2`。新版 `1.0` / build `3` 已通过本机认证签名并安装；两个对应 4.6 模型已校验并导入。2026-10-18 用户反馈：USB 连接下眼镜图像、声音和 iPhone MiniCPM 推理已跑通，仍需手动进行单轮交互。本次无线与自动多轮改动另行验证，不能继承旧版的端到端结论。
 - 不在此文档写入个人设备序列号、UDID、Apple账号或内网凭据。现场更新请用设备类型和验证结果描述。
 
 可重复执行无设备测试：

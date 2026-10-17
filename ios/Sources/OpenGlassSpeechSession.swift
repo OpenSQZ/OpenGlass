@@ -8,7 +8,7 @@ import AVFoundation
 final class OpenGlassSpeechSession {
     var onPartial: ((String) -> Void)?
     var onFinal: ((String) -> Void)?
-    var onError: ((String) -> Void)?
+    var onError: ((Failure) -> Void)?
     var onStatus: ((String) -> Void)?
     private(set) var isListening = false
     var isActive: Bool { request != nil }
@@ -20,9 +20,10 @@ final class OpenGlassSpeechSession {
     private var finishTimer: Timer?
     private var sessionID = UUID()
     private var latestText = ""
-    private var startedAt = Date()
-    private var lastVoiceAt: Date?
-    private var lastPacketAt = Date()
+    private var startedAt = ProcessInfo.processInfo.systemUptime
+    private var lastVoiceAt: TimeInterval?
+    private var lastTranscriptAt: TimeInterval?
+    private var lastPacketAt = ProcessInfo.processInfo.systemUptime
     private var pendingByte: UInt8?
     private var ending = false
     private let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
@@ -40,14 +41,14 @@ final class OpenGlassSpeechSession {
     func start(localeIdentifier: String) throws {
         stop()
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
-            throw SpeechError.message("未获语音识别权限。可在系统设置中允许，或关闭语音、使用文字提问。")
+            throw Failure.permissionDenied
         }
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier)),
               recognizer.supportsOnDeviceRecognition else {
-            throw SpeechError.message("此语言的离线语音识别不可用。请在 iPhone 下载对应语言资源后重试，或使用文字提问；不会转到云端。")
+            throw Failure.languageUnavailable
         }
         guard recognizer.isAvailable else {
-            throw SpeechError.message("系统离线语音识别暂不可用，请稍后重新启动，或使用文字提问。")
+            throw Failure.temporarilyUnavailable
         }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.requiresOnDeviceRecognition = true
@@ -58,9 +59,10 @@ final class OpenGlassSpeechSession {
         self.request = request
         latestText = ""
         ending = false
-        startedAt = Date()
-        lastPacketAt = Date()
+        startedAt = ProcessInfo.processInfo.systemUptime
+        lastPacketAt = startedAt
         lastVoiceAt = nil
+        lastTranscriptAt = nil
         isListening = true
         let id = sessionID
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
@@ -68,7 +70,10 @@ final class OpenGlassSpeechSession {
                 guard let self, self.sessionID == id else { return }
                 if let result {
                     let text = result.bestTranscription.formattedString
-                    if !text.isEmpty && text != self.latestText { self.lastVoiceAt = Date() }
+                    if !text.isEmpty && text != self.latestText {
+                        self.lastVoiceAt = ProcessInfo.processInfo.systemUptime
+                        self.lastTranscriptAt = self.lastVoiceAt
+                    }
                     self.latestText = text
                     self.onPartial?(self.latestText)
                     if result.isFinal { self.complete(); return }
@@ -77,8 +82,16 @@ final class OpenGlassSpeechSession {
                     if self.ending && !self.latestText.isEmpty {
                         self.complete()
                     } else {
+                        let failure: Failure
+                        if SFSpeechRecognizer.authorizationStatus() != .authorized {
+                            failure = .permissionDenied
+                        } else if self.recognizer?.supportsOnDeviceRecognition == false {
+                            failure = .languageUnavailable
+                        } else {
+                            failure = .recognitionInterrupted(error.localizedDescription)
+                        }
                         self.stop()
-                        self.onError?("离线语音识别中断：\(error.localizedDescription)。可重新启动或使用文字提问。")
+                        self.onError?(failure)
                     }
                 }
             }
@@ -110,7 +123,7 @@ final class OpenGlassSpeechSession {
             samples[index] = sample
             squareSum += sample * sample
         }
-        let now = Date()
+        let now = ProcessInfo.processInfo.systemUptime
         lastPacketAt = now
         if sqrt(squareSum / Float(frames)) > 0.012 { lastVoiceAt = now }
         request.append(buffer)
@@ -152,28 +165,52 @@ final class OpenGlassSpeechSession {
 
     private func tick() {
         guard isListening else { return }
-        let now = Date()
-        if let lastVoiceAt, now.timeIntervalSince(lastVoiceAt) >= 1.3 {
-            finishUtterance()
-        } else if now.timeIntervalSince(startedAt) >= 25 {
-            finishUtterance()
-        } else if now.timeIntervalSince(lastPacketAt) >= 5 {
+        let now = ProcessInfo.processInfo.systemUptime
+        let action = OpenGlassUtteranceTiming.action(now: now, startedAt: startedAt,
+            lastPacketAt: lastPacketAt, lastVoiceAt: lastVoiceAt,
+            lastTranscriptAt: lastTranscriptAt, hasText: !latestText.isEmpty)
+        switch action {
+        case .finish: finishUtterance()
+        case .audioTimeout:
             stop()
-            onError?("Rokid 音频超过5秒未到达。确认连接后重新启动语音。")
+            onError?(.audioTimeout)
+        case .listen: break
         }
     }
 
     private func complete() {
-        let text = latestText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = latestText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Punctuation-only final results are not questions. Silence and failed
+        // recognition finish normally and let the controller schedule a retry.
+        let hasWords = candidate.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
+        let text = hasWords ? candidate : ""
         stop()
         onFinal?(text)
     }
 
-    enum SpeechError: LocalizedError {
-        case message(String)
+    enum Failure: LocalizedError {
+        case permissionDenied, languageUnavailable, temporarilyUnavailable, audioTimeout
+        case recognitionInterrupted(String)
+
+        var requiresUserAction: Bool {
+            switch self {
+            case .permissionDenied, .languageUnavailable: return true
+            default: return false
+            }
+        }
         var errorDescription: String? {
-            if case .message(let message) = self { return message }
-            return nil
+            switch self {
+            case .permissionDenied:
+                return "未获语音识别权限。请在系统设置中允许后点击“恢复自动语音”；文字提问仍可使用。"
+            case .languageUnavailable:
+                return "此语言的离线识别资源不可用。请下载资源或切换语言后恢复；不会转到云端。"
+            case .temporarilyUnavailable:
+                return "系统离线识别暂不可用。"
+            case .audioTimeout:
+                return "Rokid 音频暂时没有到达。"
+            case .recognitionInterrupted(let message):
+                return "离线识别暂时中断：\(message)"
+            }
         }
     }
 }

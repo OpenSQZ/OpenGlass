@@ -181,6 +181,7 @@ def prepare(root: Path, destination: Path, lock: dict, build_number: str) -> dic
     info = plistlib.loads(git_file(destination, revision, f"{APP}/Info.plist"))
     info.update({"CFBundleDisplayName": lock["display_name"],
                  "NSLocalNetworkUsageDescription": LOCAL_NETWORK_DESCRIPTION,
+                 "NSBonjourServices": ["_openglass._tcp"],
                  "NSSpeechRecognitionUsageDescription": SPEECH_DESCRIPTION})
     # No background-mode claim: receiving and inference require foreground use.
     info.setdefault("NSAppTransportSecurity", {})["NSAllowsLocalNetworking"] = True

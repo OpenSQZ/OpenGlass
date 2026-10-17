@@ -48,8 +48,8 @@ function Get-OpenGlassRokid {
     }
     if ($Package -notin $installed) { throw 'The requested OpenGlass Rokid package is not installed.' }
     $info = Invoke-OpenGlassAdb $Adb @('-s', $Serial, 'shell', 'dumpsys', 'package', $Package)
-    if ($info -notmatch 'versionName=(0\.1\.3(?:-debug)?)(?:\s|$)') {
-        throw 'Collector version 0.1.3 is required for pc_base_url. Upgrade or review newer protocol compatibility first.'
+    if ($info -notmatch 'versionName=((?:0\.1\.3|0\.2\.0)(?:-debug)?)(?:\s|$)') {
+        throw 'Collector version 0.1.3 or 0.2.0 is required. Upgrade or review newer protocol compatibility first.'
     }
     $version = $Matches[1]
     $resolved = Invoke-OpenGlassAdb $Adb @('-s', $Serial, 'shell', 'cmd', 'package', 'resolve-activity', '--brief', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER', $Package)

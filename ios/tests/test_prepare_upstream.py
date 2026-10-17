@@ -87,6 +87,7 @@ class PrepareTests(unittest.TestCase):
         self.assertTrue(info["UIFileSharingEnabled"])
         self.assertTrue(info["NSAppTransportSecurity"]["NSAllowsLocalNetworking"])
         self.assertIn("Rokid", info["NSLocalNetworkUsageDescription"])
+        self.assertEqual(info["NSBonjourServices"], ["_openglass._tcp"])
         self.assertIn("设备端", info["NSSpeechRecognitionUsageDescription"])
         self.assertNotIn("UIBackgroundModes", info)
         self.assertEqual(plistlib.loads((self.destination / f"{prepare.APP}/{prepare.APP}.entitlements").read_bytes()), {})

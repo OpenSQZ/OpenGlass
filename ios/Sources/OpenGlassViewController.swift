@@ -18,9 +18,17 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
     private var isAuthorizingSpeech = false
     private var isAnswering = false
     private var audioConnected = false
-    private var speechPaused = false
+    private var voiceLoop = OpenGlassVoiceLoopPolicy()
+    private var wantsService = false
+    private var attemptedAutomaticStart = false
+    private var isInBackground = false
+    private var audioInterruptionActive = false
+    private var listeningWakeTask: Task<Void, Never>?
+    private var speechAuthorizationID = UUID()
+    private var completedTurns = 0
     private var suppressAnswerSpeech = false
     private var runID = UUID()
+    private var turnID = UUID()
     private var latestRawImage: Data?
     private var latestImage: UIImage?
     private var latestImageAt: Date?
@@ -68,7 +76,11 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         connectionLabel.text = "Rokid 尚未连接"
         answerView.text = "回答会显示在这里。"
         frameTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshFrameAge() }
+            Task { @MainActor in
+                self?.refreshFrameAge()
+                self?.refreshAddresses()
+                self?.reconcileAutomaticLoop()
+            }
         }
         refreshAddresses()
         refreshFrameAge()
@@ -79,11 +91,26 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         refreshAddresses()
+        if !attemptedAutomaticStart {
+            attemptedAutomaticStart = true
+            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let hasModelFiles = OpenGlassModelSession.modelFiles.allSatisfy {
+                FileManager.default.fileExists(atPath: documents.appendingPathComponent($0).path)
+            }
+            if hasModelFiles {
+                wantsService = true
+                if voiceSwitch.isOn { voiceLoop.requestListening() }
+                reconcileAutomaticLoop()
+            } else {
+                statusLabel.text = "首次使用请在“模型下载”中准备 MiniCPM-V 4.6，然后启动接收。"
+            }
+        }
         UIApplication.shared.isIdleTimerDisabled = isRunning
     }
 
     deinit {
         frameTimer?.invalidate()
+        listeningWakeTask?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -165,9 +192,9 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         speakSwitch.addTarget(self, action: #selector(speakChanged), for: .valueChanged)
         stack.addArrangedSubview(row("朗读回答", speakSwitch))
         stack.addArrangedSubview(routeLabel)
-        configureButton(listenButton, title: "开始语音", action: #selector(toggleListening))
+        configureButton(listenButton, title: "恢复自动语音", action: #selector(toggleListening))
         stack.addArrangedSubview(listenButton)
-        transcriptLabel.text = "识别文字会显示在这里。停顿约1.3秒，或点“结束语句”提问。"
+        transcriptLabel.text = "启动后自动听取 Rokid 语音。停顿约1.3秒后提问，朗读结束会自动听下一句。"
         stack.addArrangedSubview(transcriptLabel)
         questionField.borderStyle = .roundedRect
         questionField.placeholder = "输入问题，例如：我面前有什么？"
@@ -192,7 +219,7 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         note.numberOfLines = 0
         note.font = .preferredFont(forTextStyle: .footnote)
         note.textColor = .secondaryLabel
-        note.text = "Rokid 可通过同一局域网或 Windows 双 USB 中继连接。首次使用请先下载模型。此 App 的模型文件与原 MiniCPM 示例分开保存。进入后台会停止接收和语音，回到前台后请重新启动。"
+        note.text = "Rokid 可通过同一局域网或 Windows 双 USB 中继连接。首次使用请先下载模型。此 App 的模型文件与原 MiniCPM 示例分开保存。进入后台会停止接收和语音；回到前台会恢复此前运行状态。主动停止后不会自动重启。"
         stack.addArrangedSubview(note)
     }
 
@@ -226,10 +253,14 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
             self.latestImageAt = Date()
             self.preview.image = self.latestImage
             self.refreshFrameAge()
+            self.reconcileAutomaticLoop()
         }
         server.onAudio = { [weak self] data in
-            guard let self, self.isRunning, !self.isAnswering, self.activeUtterance == nil,
-                  !self.speechPaused else { return }
+            guard let self else { return }
+            self.reconcileAutomaticLoop()
+            guard self.isRunning, !self.isInBackground, !self.audioInterruptionActive,
+                  !self.isAnswering, !self.model.isBusy, self.activeUtterance == nil,
+                  self.voiceLoop.canListen(at: self.monotonicNow) else { return }
             self.speech.appendPCM16LE(data)
         }
         server.onStatus = { [weak self] status in self?.connectionLabel.text = status }
@@ -243,7 +274,7 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
                 self.speech.stop()
                 if self.isRunning { self.statusLabel.text = "Rokid 音频已断开，等待重新连接。" }
             } else {
-                self.startListeningIfPossible()
+                self.reconcileAutomaticLoop()
             }
             self.updateControls()
         }
@@ -257,31 +288,40 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
             self?.statusLabel.text = message
             self?.updateControls()
         }
-        speech.onError = { [weak self] message in
-            guard let self else { return }
-            self.speechPaused = true
-            self.statusLabel.text = message
-            self.updateControls()
+        speech.onError = { [weak self] failure in
+            self?.handleSpeechFailure(failure)
         }
         speech.onFinal = { [weak self] text in
-            guard let self, self.isRunning, !self.speechPaused else { return }
+            guard let self, self.isRunning, !self.isInBackground,
+                  self.voiceLoop.wantsListening, self.voiceLoop.blockedReason == nil else { return }
             if text.isEmpty {
-                self.statusLabel.text = "未识别到问题，继续等待语音。"
-                self.resumeListeningAfterEchoDelay()
+                self.retryListening(message: "未识别到问题，继续等待语音。")
             } else {
+                self.voiceLoop.receivedUtterance()
                 self.questionField.text = text
-                self.submit(text)
+                self.submit(text, fromSpeech: true)
             }
             self.updateControls()
         }
     }
 
     @objc private func toggleService() {
-        if isRunning || isStarting { stopService(message: "接收已停止，点击启动可恢复。"); return }
-        guard !model.isBusy, !model.requiresAppRestart else { return }
+        if wantsService || isRunning || isStarting {
+            stopService(message: "接收已停止，点击启动可恢复。")
+            return
+        }
+        guard !model.requiresAppRestart else { return }
+        wantsService = true
+        if voiceSwitch.isOn { voiceLoop.requestListening() } else { voiceLoop.pause() }
+        reconcileAutomaticLoop()
+    }
+
+    private func startServiceIfPossible() {
+        guard wantsService, !isInBackground, !isRunning, !isStarting,
+              !model.isBusy, !isAnswering, !model.requiresAppRestart else { return }
         isStarting = true
         isRunning = true
-        speechPaused = false
+        completedTurns = 0
         runID = UUID()
         let id = runID
         latestRawImage = nil
@@ -291,10 +331,7 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         do {
             try server.start(port: 18080)
         } catch {
-            isRunning = false
-            isStarting = false
-            statusLabel.text = "无法启动接收：\(error.localizedDescription)"
-            updateControls()
+            stopService(message: "无法启动接收：\(error.localizedDescription)")
             return
         }
         UIApplication.shared.isIdleTimerDisabled = true
@@ -303,35 +340,49 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         refreshFrameAge()
         updateControls()
         Task {
+            guard isRunning, runID == id, !isInBackground else { return }
             do {
                 try await model.load()
                 guard isRunning, runID == id else { updateControls(); return }
-                statusLabel.text = "等待 Rokid 画面和音频；也可以文字提问。"
-                if voiceSwitch.isOn {
+                statusLabel.text = voiceLoop.wantsListening
+                    ? "等待 Rokid 画面和音频；也可以文字提问。"
+                    : "接收已启动；自动语音保持关闭或暂停，仍可文字提问。"
+                if voiceSwitch.isOn, voiceLoop.wantsListening, voiceLoop.blockedReason == nil {
+                    let authorizationID = UUID()
+                    speechAuthorizationID = authorizationID
+                    isAuthorizingSpeech = true
                     let authorized = await OpenGlassSpeechSession.authorize()
                     guard isRunning, runID == id else { updateControls(); return }
-                    if !authorized {
-                        speechPaused = true
-                        statusLabel.text = "未获语音识别权限。可用文字提问，或在系统设置中允许。"
+                    if speechAuthorizationID == authorizationID {
+                        isAuthorizingSpeech = false
+                        if !authorized, voiceLoop.wantsListening {
+                            handleSpeechFailure(.permissionDenied)
+                        }
                     }
                 }
                 isStarting = false
-                startListeningIfPossible()
+                reconcileAutomaticLoop()
             } catch {
                 if runID == id { stopService(message: error.localizedDescription) }
             }
-            isStarting = false
             updateControls()
+            endBackgroundTaskIfIdle()
         }
     }
 
-    private func stopService(message: String) {
+    private func stopService(message: String, preservingIntent: Bool = false) {
+        if !preservingIntent {
+            wantsService = false
+            voiceLoop.pause()
+        }
         isRunning = false
         isStarting = false
         isAuthorizingSpeech = false
-        speechPaused = true
+        speechAuthorizationID = UUID()
+        cancelListeningWake()
         suppressAnswerSpeech = true
         runID = UUID()
+        turnID = UUID()
         speech.stop()
         stopSpeaking()
         server.stop()
@@ -343,12 +394,16 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
     }
 
     @objc private func stopCurrentTurn() {
-        speechPaused = true
+        turnID = UUID()
+        voiceLoop.pause()
+        cancelListeningWake()
+        isAuthorizingSpeech = false
+        speechAuthorizationID = UUID()
         suppressAnswerSpeech = true
         speech.stop()
         stopSpeaking()
         model.requestStop()
-        statusLabel.text = model.isBusy ? "正在结束本轮推理…" : "语音已暂停，点击“开始语音”可恢复。"
+        statusLabel.text = model.isBusy ? "正在结束本轮推理…" : "语音已暂停，点击“恢复自动语音”可恢复。"
         updateControls()
     }
 
@@ -362,19 +417,22 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         return true
     }
 
-    private func submit(_ text: String) {
+    private func submit(_ text: String, fromSpeech: Bool = false) {
         let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { statusLabel.text = "请先输入或说出问题。"; return }
-        guard isRunning, !isStarting, model.isLoaded, !model.isBusy, !isAnswering else {
+        guard isRunning, !isInBackground, !isStarting, model.isLoaded, !model.isBusy, !isAnswering else {
             statusLabel.text = "请先启动接收，并等待当前模型任务结束。"
             return
         }
-        guard question.count <= 500 else { statusLabel.text = "问题请控制在500字以内。"; return }
+        guard question.count <= 500 else {
+            if fromSpeech { retryListening(message: "问题超过500字，请简短地重新说一次。") }
+            else { statusLabel.text = "问题请控制在500字以内。" }
+            return
+        }
         guard let image = latestImage, let receivedAt = latestImageAt,
               Date().timeIntervalSince(receivedAt) <= maximumFrameAge else {
             speech.stop()
-            speechPaused = true
-            statusLabel.text = "没有8秒内的新画面。请恢复 Rokid 图像连接后，再次提问。"
+            statusLabel.text = "本句未提交：没有8秒内的新画面。收到新画面后会自动继续听，请重新说出问题。"
             updateControls()
             return
         }
@@ -385,8 +443,16 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         answerView.text = ""
         statusLabel.text = "已暂停收音，正在本机理解画面…"
         let id = runID
+        turnID = UUID()
+        let currentTurnID = turnID
         updateControls()
         Task {
+            guard isRunning, runID == id, turnID == currentTurnID, !isInBackground else {
+                isAnswering = false
+                updateControls()
+                reconcileAutomaticLoop()
+                return
+            }
             var imageURL: URL?
             do {
                 let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -400,7 +466,8 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
                 imageURL = file
                 let answer = try await model.ask(question: question, imageURL: file, answerLanguage: localeIdentifier)
                 isAnswering = false
-                if isRunning, runID == id {
+                if isRunning, runID == id, turnID == currentTurnID {
+                    completedTurns += 1
                     answerView.text = answer.isEmpty ? "模型没有返回可朗读的文字，请换个问题重试。" : answer
                     if !suppressAnswerSpeech, speakSwitch.isOn, !answer.isEmpty {
                         speak(answer)
@@ -412,11 +479,10 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
             } catch {
                 isAnswering = false
                 if isRunning, runID == id {
-                    statusLabel.text = error.localizedDescription
-                    // Errors are explicit; do not restart recognition in a loop.
-                    speechPaused = true
                     if model.requiresAppRestart || !model.isLoaded {
                         stopService(message: error.localizedDescription)
+                    } else if turnID == currentTurnID, voiceLoop.wantsListening {
+                        retryListening(message: error.localizedDescription)
                     }
                 }
             }
@@ -424,43 +490,110 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
             if !model.requiresAppRestart, let imageURL { try? FileManager.default.removeItem(at: imageURL) }
             updateControls()
             endBackgroundTaskIfIdle()
+            reconcileAutomaticLoop()
         }
     }
 
     private var localeIdentifier: String { languageControl.selectedSegmentIndex == 1 ? "en-US" : "zh-CN" }
+    private var monotonicNow: TimeInterval { ProcessInfo.processInfo.systemUptime }
+    private var hasFreshFrame: Bool {
+        guard latestImage != nil, let date = latestImageAt else { return false }
+        return Date().timeIntervalSince(date) <= maximumFrameAge
+    }
+
+    /// All timer, frame, connection and audio callbacks go through the same
+    /// admission gate. None can bypass a retry or the post-TTS echo deadline.
+    private func reconcileAutomaticLoop() {
+        guard !isInBackground else { return }
+        if !isRunning { startServiceIfPossible() }
+        startListeningIfPossible()
+    }
 
     private func startListeningIfPossible() {
-        guard isRunning, !isStarting, !isAuthorizingSpeech, !isAnswering, !model.isBusy, model.isLoaded,
-              !model.requiresAppRestart, voiceSwitch.isOn, !speechPaused,
-              audioConnected, activeUtterance == nil, !speech.isActive else { return }
+        guard isRunning, !isInBackground, !audioInterruptionActive,
+              !isStarting, !isAuthorizingSpeech, !isAnswering, !model.isBusy, model.isLoaded,
+              !model.requiresAppRestart, voiceSwitch.isOn, voiceLoop.wantsListening,
+              voiceLoop.blockedReason == nil, audioConnected, hasFreshFrame,
+              activeUtterance == nil, !speech.isActive else { return }
+        guard voiceLoop.canListen(at: monotonicNow) else {
+            scheduleListeningWake()
+            return
+        }
         do {
             try speech.start(localeIdentifier: localeIdentifier)
+        } catch let failure as OpenGlassSpeechSession.Failure {
+            handleSpeechFailure(failure)
         } catch {
-            speechPaused = true
-            statusLabel.text = error.localizedDescription
+            retryListening(message: error.localizedDescription)
         }
         updateControls()
+    }
+
+    private func handleSpeechFailure(_ failure: OpenGlassSpeechSession.Failure) {
+        guard isRunning, voiceLoop.wantsListening else { return }
+        speech.stop()
+        if failure.requiresUserAction {
+            voiceLoop.block(reason: failure.localizedDescription)
+            cancelListeningWake()
+            statusLabel.text = failure.localizedDescription
+            updateControls()
+        } else {
+            retryListening(message: failure.localizedDescription)
+        }
+    }
+
+    private func retryListening(message: String) {
+        guard isRunning, !isInBackground, voiceLoop.wantsListening,
+              voiceLoop.blockedReason == nil else { return }
+        speech.stop()
+        let delay = voiceLoop.retry(now: monotonicNow)
+        statusLabel.text = "\(message) \(delay.formatted())秒后自动重试。"
+        scheduleListeningWake()
+        updateControls()
+    }
+
+    private func cancelListeningWake() {
+        listeningWakeTask?.cancel()
+        listeningWakeTask = nil
+    }
+
+    private func scheduleListeningWake() {
+        guard listeningWakeTask == nil, isRunning, !isInBackground,
+              voiceLoop.wantsListening, voiceLoop.blockedReason == nil else { return }
+        let delay = voiceLoop.notBefore - monotonicNow
+        guard delay > 0 else { return }
+        let id = runID
+        listeningWakeTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            catch { return }
+            guard let self, !Task.isCancelled, self.runID == id else { return }
+            self.listeningWakeTask = nil
+            self.reconcileAutomaticLoop()
+        }
     }
 
     @objc private func toggleListening() {
         if speech.isListening { speech.finishUtterance(); updateControls(); return }
         if speech.isFinishing { return }
-        guard isRunning, !model.isBusy, !isAnswering, !isAuthorizingSpeech else { return }
+        guard isRunning, !isAuthorizingSpeech else { return }
         voiceSwitch.isOn = true
         UserDefaults.standard.set(true, forKey: "OpenGlass.voiceEnabled")
-        speechPaused = false
+        voiceLoop.requestListening()
         isAuthorizingSpeech = true
         let id = runID
+        let authorizationID = UUID()
+        speechAuthorizationID = authorizationID
+        updateControls()
         Task {
             let authorized = await OpenGlassSpeechSession.authorize()
-            guard isRunning, runID == id else { return }
+            guard isRunning, runID == id, speechAuthorizationID == authorizationID else { return }
             isAuthorizingSpeech = false
             if authorized {
                 if !audioConnected { statusLabel.text = "等待 Rokid 音频连接…" }
-                startListeningIfPossible()
+                else if !hasFreshFrame { statusLabel.text = "等待新画面，随后自动听取语音。" }
+                reconcileAutomaticLoop()
             } else {
-                speechPaused = true
-                statusLabel.text = "未获语音识别权限，请在系统设置中允许；文字提问仍可使用。"
+                handleSpeechFailure(.permissionDenied)
             }
             updateControls()
         }
@@ -472,7 +605,11 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
             if isRunning { toggleListening() }
         } else {
             speech.stop()
-            speechPaused = true
+            voiceLoop.pause()
+            cancelListeningWake()
+            isAuthorizingSpeech = false
+            speechAuthorizationID = UUID()
+            statusLabel.text = "自动语音已关闭，仍可文字提问。"
         }
         updateControls()
     }
@@ -480,7 +617,8 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
     @objc private func languageChanged() {
         UserDefaults.standard.set(languageControl.selectedSegmentIndex, forKey: "OpenGlass.speechLanguage")
         speech.stop()
-        startListeningIfPossible()
+        if voiceLoop.wantsListening { voiceLoop.requestListening() }
+        reconcileAutomaticLoop()
     }
 
     @objc private func speakChanged() {
@@ -506,13 +644,18 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
             synthesizer.speak(utterance)
         } catch {
             activeUtterance = nil
-            speechPaused = true
             statusLabel.text = "朗读不可用：\(error.localizedDescription)。回答已保留在屏幕。"
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            resumeListeningAfterEchoDelay()
         }
         updateControls()
     }
 
     private func stopSpeaking() {
+        if activeUtterance != nil || synthesizer.isSpeaking {
+            voiceLoop.protectFromEcho(now: monotonicNow)
+        }
+        // Invalidate identity before stopSpeaking can dispatch didCancel.
         activeUtterance = nil
         synthesizer.stopSpeaking(at: .immediate)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -533,19 +676,17 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         Task { @MainActor [weak self] in
             guard let self, self.activeUtterance === utterance else { return }
             self.activeUtterance = nil
-            self.speechPaused = true
-            self.statusLabel.text = "朗读被中断，点击“开始语音”可继续。"
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            self.statusLabel.text = "朗读被中断，稍后自动继续听取语音。"
+            self.resumeListeningAfterEchoDelay()
             self.updateControls()
         }
     }
 
     private func resumeListeningAfterEchoDelay() {
-        let id = runID
-        Task {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            guard isRunning, runID == id else { return }
-            startListeningIfPossible()
-        }
+        voiceLoop.protectFromEcho(now: monotonicNow)
+        scheduleListeningWake()
+        reconcileAutomaticLoop()
     }
 
     @objc private func rotationChanged() {
@@ -591,10 +732,11 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
 
     private func updateControls() {
         let busy = model.isBusy || isAnswering
-        serviceButton.configuration?.title = isRunning || isStarting ? "停止接收" : "启动接收"
-        serviceButton.isEnabled = isRunning || (!busy && !model.requiresAppRestart)
+        serviceButton.configuration?.title = wantsService || isRunning || isStarting ? "停止接收" : "启动接收"
+        serviceButton.isEnabled = wantsService || isRunning || (!busy && !model.requiresAppRestart)
         askButton.isEnabled = isRunning && !isStarting && model.isLoaded && !busy && !model.requiresAppRestart
-        listenButton.configuration?.title = speech.isFinishing ? "正在结束语句…" : (speech.isListening ? "结束语句并提问" : "开始语音")
+        listenButton.configuration?.title = speech.isFinishing ? "正在结束语句…"
+            : (speech.isListening ? "结束语句并提问" : "恢复自动语音")
         listenButton.isEnabled = isRunning && !isStarting && !busy && activeUtterance == nil
             && !model.requiresAppRestart && !speech.isFinishing && !isAuthorizingSpeech
         stopTurnButton.isEnabled = isRunning || busy || activeUtterance != nil
@@ -602,7 +744,16 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         languageControl.isEnabled = !busy && activeUtterance == nil
         rotationControl.isEnabled = !busy
         voiceSwitch.isEnabled = !isStarting
+        if isRunning, let reason = voiceLoop.blockedReason { statusLabel.text = reason }
         if model.requiresAppRestart { statusLabel.text = OpenGlassModelSession.SessionError.restartRequired.localizedDescription }
+        let phase: String
+        if !isRunning || isInBackground { phase = "paused" }
+        else if busy { phase = "thinking" }
+        else if activeUtterance != nil { phase = "speaking" }
+        else if speech.isActive { phase = "listening" }
+        else if !voiceLoop.wantsListening || voiceLoop.blockedReason != nil { phase = "paused" }
+        else { phase = "waiting" }
+        server.setConversationStatus(phase: phase, completedTurns: completedTurns)
     }
 
     @objc private func showDownloads() {
@@ -621,8 +772,10 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
 
     @objc private func refreshAddresses() {
         let addresses = localIPv4Addresses()
-        addressView.text = addresses.isEmpty ? "暂无局域网 IPv4 地址。可使用 Windows 双 USB 中继，或连接 Wi-Fi 后刷新。"
+        let endpoints = addresses.isEmpty
+            ? "等待 Wi-Fi / 热点地址；USB 中继仍可使用。"
             : addresses.map { "http://\($0):18080" }.joined(separator: "\n")
+        addressView.text = "无线接收：\(RokidIngressServer.serviceName)\n\(endpoints)\n让眼镜加入此 iPhone 热点或同一 Wi-Fi，选择自动连接。"
     }
 
     @objc private func copyAddress() {
@@ -641,7 +794,9 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
         while let current = cursor {
             let interface = current.pointee
             defer { cursor = interface.ifa_next }
-            guard let address = interface.ifa_addr, address.pointee.sa_family == UInt8(AF_INET) else { continue }
+            guard let address = interface.ifa_addr, address.pointee.sa_family == UInt8(AF_INET),
+                  interface.ifa_flags & UInt32(IFF_UP) != 0,
+                  interface.ifa_flags & UInt32(IFF_LOOPBACK) == 0 else { continue }
             let name = String(cString: interface.ifa_name)
             guard name == "en0" || name.hasPrefix("bridge") || name.hasPrefix("ap") else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
@@ -659,7 +814,8 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
     }
 
     @objc private func enteredBackground() {
-        stopService(message: "已进入后台并停止。回到前台后点击启动。")
+        isInBackground = true
+        stopService(message: "已进入后台。回到前台后恢复此前运行状态。", preservingIntent: true)
         if model.isBusy, backgroundTask == .invalid {
             backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "FinishOpenGlassTurn") { [weak self] in
                 Task { @MainActor in
@@ -678,18 +834,34 @@ final class OpenGlassViewController: UIViewController, UITextFieldDelegate, AVSp
     }
 
     @objc private func enteredForeground() {
+        isInBackground = false
+        // Background suspension deactivated our audio session; iOS may omit
+        // its matching interruption-ended notification while suspended.
+        audioInterruptionActive = false
         refreshAddresses()
-        statusLabel.text = model.isBusy ? "正在结束上一轮推理，请稍候。" : "已回到前台，点击“启动接收”恢复。"
+        if wantsService {
+            statusLabel.text = model.isBusy ? "正在结束上一轮推理，随后自动恢复接收。" : "已回到前台，正在恢复接收。"
+            reconcileAutomaticLoop()
+        } else {
+            statusLabel.text = "已回到前台，接收保持停止。"
+        }
         updateControls()
     }
 
     @objc private func audioInterrupted(_ notification: Notification) {
-        guard let type = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-              type == AVAudioSession.InterruptionType.began.rawValue else { return }
-        speechPaused = true
-        speech.stop()
-        stopSpeaking()
-        statusLabel.text = "系统音频被打断；恢复后点击“开始语音”，或使用文字提问。"
+        guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: rawType) else { return }
+        switch type {
+        case .began:
+            audioInterruptionActive = true
+            speech.stop()
+            stopSpeaking()
+            if isRunning { statusLabel.text = "系统音频暂时中断，恢复后继续自动语音。" }
+        case .ended:
+            audioInterruptionActive = false
+            resumeListeningAfterEchoDelay()
+        @unknown default: break
+        }
         updateControls()
     }
 

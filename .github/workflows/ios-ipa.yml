@@ -36,6 +36,8 @@ jobs:
         run: python3 -m unittest discover -s ios/tests -p 'test_prepare*.py' -v
       - name: Test Rokid wire protocol
         run: bash ios/tests/run_protocol_tests.sh
+      - name: Test automatic voice conversation lifecycle
+        run: bash ios/tests/run_voice_loop_tests.sh
       - name: Test Windows USB relay without devices
         run: python3 -m unittest discover -s ios/windows -p 'test_usb_relay.py' -v
       - name: Prepare pinned upstream and OpenGlass sources
