@@ -236,6 +236,7 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File 'C:\path\to\OpenGl
 - 2026-10-18 热点真机测试：眼镜直接向当前 iPhone 热点网关发送图像和音频，手机接收计数持续增长。拔掉眼镜 USB 后，ADB 已无设备，手机仍持续收流，`completed_turns` 增至 `3`。随后用户确认：无需点按钮即可连续问答，且眼镜和 iPhone 两根 USB 均拔掉后仍正常。已验证本机 ASR → MiniCPM-V 4.6 → TTS 的无线自动多轮流程；酒店 Wi-Fi 尚未实测。
 - 包含 Android 最终改动的提交 `c439fa3` 也通过 [CI 39058773419](https://github.com/OpenSQZ/OpenGlass/actions/runs/39058773419)。其 iOS Swift 源码与已安装的 build `5` 相同，无需再次安装。
 - 后续用户确认单行眼镜界面和首轮 ASR/TTS 正常，但再次提问出现空识别，说明此前成功记录不足以证明持续对话可靠。此次修复空轮退避和收尾期间丢音，并增加 ASR 操作状态诊断；新版端到端多轮结果待安装后复测。
+- 语音修复提交 `57589c0` 通过 [CI 39061505661](https://github.com/OpenSQZ/OpenGlass/actions/runs/39061505661)：2176项语音循环/诊断/交接断言、1399项协议检查、7项工程准备测试、7项USB中继测试及真机Release编译通过。未签名IPA build `11` 已下载，manifest、ZIP完整性、Info.plist版本及bundle ID已核验；SHA256为 `1B9839531088356F914B6510C33377A971CFBF6EF162915106DC196413305B6A`。Rokid code `8` 的单行界面更新已覆盖安装并确认相机/麦克风授权；APK SHA256为 `A06D29A45CC2D346A331EFB7AA63B8FA3220963EEC3AABE83C57554A4CFD80F5`。
 - 不在此文档写入个人设备序列号、UDID、Apple账号或内网凭据。现场更新请用设备类型和验证结果描述。
 
 可重复执行无设备测试：
